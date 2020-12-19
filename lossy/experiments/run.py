@@ -158,12 +158,19 @@ def get_preproc():
     return preproc
 
 
-def train_inner_clf(clf, opt_clf, X_opt_clf_1, X_opt_clf_2, X_orig_clf, y):
-    with higher.innerloop_ctx(clf, opt_clf) as (fclf, diffopt):
-        fclf_out_opt_1 = fclf(X_opt_clf_1)
-        cross_ent_opt_before = th.nn.functional.cross_entropy(fclf_out_opt_1, y)
-        diffopt.step(cross_ent_opt_before)
-        return evaluate_clf(fclf, X_opt_clf_2, X_orig_clf, y) + (cross_ent_opt_before,)
+def train_inner_clf(clf, inner_optim_clf, X_opt_clf_1, X_opt_clf_2, X_orig_clf, y, n_steps,
+                    copy_initial_weights):
+    with higher.innerloop_ctx(clf, inner_optim_clf, copy_initial_weights=copy_initial_weights) as (
+            fclf, diffopt):
+
+        for i_step in range(n_steps):
+            fclf_out_opt_1 = fclf(X_opt_clf_1)
+            cross_ent_opt_before = th.nn.functional.cross_entropy(fclf_out_opt_1, y)
+            if i_step == 0:
+                cross_ent_opt_at_start = cross_ent_opt_before.detach()
+            diffopt.step(cross_ent_opt_before)
+        return evaluate_clf(fclf, X_opt_clf_2, X_orig_clf, y) + (cross_ent_opt_at_start,)
+
 
 def evaluate_clf(clf, X_opt_clf, X_orig_clf, y):
         clf_out_orig = clf(X_orig_clf)
