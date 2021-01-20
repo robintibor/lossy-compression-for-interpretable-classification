@@ -26,6 +26,7 @@ from invertibleeeg.images.unet import UnetGenerator, WrapResidualIdentityUnet
 from invertibleeeg.images.moving_batch_norm import MovingBatchNorm2d
 from invertible.expression import Expression
 from invertibleeeg.images.optim import RAdam
+from invertibleeeg.images.datautil import restrict_dataset_to_classes
 # train one step with optimized inputs
 from tensorboardX import SummaryWriter
 from rtsutils.plot import rescale, stack_images_in_rows, create_rgb_image
@@ -42,14 +43,31 @@ log = logging.getLogger(__name__)
 
 
 
-def load_data(n_images, train_batch_size=32, test_batch_size=100):
-    transform = transforms.ToTensor()
-    trainset = torchvision.datasets.CIFAR10(
-        root='/home/schirrmr/data/pytorch-datasets/data/CIFAR10/',
-        train=True, download=False, transform=transform)
-    testset = torchvision.datasets.CIFAR10(
-        root='/home/schirrmr/data/pytorch-datasets/data/CIFAR10/',
-        train=False, download=False, transform=transform)
+def load_data(setname, n_images, train_batch_size=32, test_batch_size=100, i_classes=None):
+
+    if setname == 'CIFAR10':
+        transform = transforms.ToTensor()
+        trainset = torchvision.datasets.CIFAR10(
+            root='/home/schirrmr/data/pytorch-datasets/data/CIFAR10/',
+            train=True, download=False, transform=transform)
+        testset = torchvision.datasets.CIFAR10(
+            root='/home/schirrmr/data/pytorch-datasets/data/CIFAR10/',
+            train=False, download=False, transform=transform)
+    elif setname == 'MNIST':
+        transform = transforms.Compose([
+            transforms.Lambda(lambda im: im.convert("RGB")),
+            transforms.ToTensor()])
+        trainset = torchvision.datasets.MNIST(
+            '/home/schirrmr/data/pytorch-datasets/', train=True, download=False,
+            transform=transform)
+        testset = torchvision.datasets.MNIST(
+            '/home/schirrmr/data/pytorch-datasets/', train=False, download=False,
+            transform=transform)
+    else:
+        raise ValueError(f"Unknown setname {setname}")
+    if i_classes is not None:
+        trainset = restrict_dataset_to_classes(trainset, i_classes, remap_labels=True)
+        testset = restrict_dataset_to_classes(testset, i_classes, remap_labels=True)
     if n_images is not None:
         trainset = th.utils.data.Subset(trainset, np.arange(n_images))
         testset = th.utils.data.Subset(testset, np.arange(n_images))
@@ -87,7 +105,11 @@ def preprocess_for_clf(x):
         0).unsqueeze(-1).unsqueeze(-1)
     th_std = np_to_th(std['cifar10'], device=x.device, dtype=np.float32).unsqueeze(
         0).unsqueeze(-1).unsqueeze(-1)
+    # if it was greyscale before, keep greyscale
+    was_grey_scale = x.shape[1] == 1
     x = (x - th_mean) / th_std
+    if was_grey_scale:
+        x = th.mean(x, dim=1, keepdim=True)
     return x
 
 
@@ -126,8 +148,8 @@ def load_clf():
     return clf
 
 
-def load_glow():
-    model = th.load('/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th')
+def load_glow(file_name='/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th'):
+    model = th.load(file_name)
     from invglow.invertible.init import init_all_modules
     init_all_modules(model, None)
     return model
@@ -161,15 +183,15 @@ def get_preproc():
 def train_inner_clf(clf, inner_optim_clf, X_opt_clf_1, X_opt_clf_2, X_orig_clf, y, n_steps,
                     copy_initial_weights):
     with higher.innerloop_ctx(clf, inner_optim_clf, copy_initial_weights=copy_initial_weights) as (
-            fclf, diffopt):
+            func_clf, diffopt):
 
         for i_step in range(n_steps):
-            fclf_out_opt_1 = fclf(X_opt_clf_1)
-            cross_ent_opt_before = th.nn.functional.cross_entropy(fclf_out_opt_1, y)
+            func_clf_out_opt_1 = func_clf(X_opt_clf_1)
+            cross_ent_opt_before = th.nn.functional.cross_entropy(func_clf_out_opt_1, y)
             if i_step == 0:
                 cross_ent_opt_at_start = cross_ent_opt_before.detach()
             diffopt.step(cross_ent_opt_before)
-        return evaluate_clf(fclf, X_opt_clf_2, X_orig_clf, y) + (cross_ent_opt_at_start,)
+        return evaluate_clf(func_clf, X_opt_clf_2, X_orig_clf, y) + (cross_ent_opt_at_start,)
 
 
 def evaluate_clf(clf, X_opt_clf, X_orig_clf, y):
