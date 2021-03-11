@@ -23,28 +23,23 @@ def higher_loop(clf, optim_clf, data, inner_transform_fn, inner_loss_fn, copy_in
             inner_loss = inner_loss_fn(func_clf, X_opt_clf, y)
             func_opt.step(inner_loss)
             X_opt_clfs.append(X_opt_clf)
-    return func_clf, func_opt, X_opt_clfs,
+    return func_clf, func_opt, X_opt_clfs, X, y
+
 
 def higher_loss(clf, optim_clf, data, inner_transform_fn, inner_loss_fn, outer_loss_fn,
                 copy_initial_weights, copy_final_weights, only_eval_last):
     if copy_final_weights:
         assert not copy_initial_weights, "not tested this combination"
 
-
-    X_opt_clfs = []
-    with higher.innerloop_ctx(clf, optim_clf, copy_initial_weights=copy_initial_weights) as (
-            func_clf, func_opt):
-        for X, y in data:
-            X_opt_clf = inner_transform_fn(X=X)
-            inner_loss = inner_loss_fn(func_clf, X_opt_clf, y)
-            func_opt.step(inner_loss)
-            X_opt_clfs.append(X_opt_clf)
+    func_clf, func_opt, X_opt_clfs, last_X, last_y = higher_loop(
+        clf, optim_clf, data, inner_transform_fn=inner_transform_fn,
+        inner_loss_fn=inner_loss_fn, copy_initial_weights=copy_initial_weights)
 
     outer_losses = []
     if only_eval_last:
-        X_clf = preprocess_for_clf(X)
+        X_clf = preprocess_for_clf(last_X)
         X_opt_clf = X_opt_clfs[-1]
-        outer_loss = outer_loss_fn(func_clf, X_opt_clf, X_clf, y)
+        outer_loss = outer_loss_fn(func_clf, X_opt_clf, X_clf, last_y)
         loss = th.stack(outer_loss)
     else:
         for (X, y), X_opt_clf in zip(data, X_opt_clfs):
@@ -66,4 +61,4 @@ def higher_loss(clf, optim_clf, data, inner_transform_fn, inner_loss_fn, outer_l
         optim_clf.param_groups[0]['params'] = list(clf.parameters())
         state_dict = dict(state=state_dict_state, param_groups=optim_clf.param_groups)
         optim_clf.load_state_dict(state_dict)
-    return loss
+    return loss, func_clf
