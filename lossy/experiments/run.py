@@ -194,23 +194,54 @@ def train_inner_clf(clf, inner_optim_clf, X_opt_clf_1, X_opt_clf_2, X_orig_clf, 
         return evaluate_clf(func_clf, X_opt_clf_2, X_orig_clf, y) + (cross_ent_opt_at_start,)
 
 
+def kl_divergence(clf_out_a, clf_out_b):
+    return th.mean(
+            th.sum(
+                th.nn.functional.softmax(clf_out_a, dim=1) *
+                (th.nn.functional.log_softmax(clf_out_a, dim=1) -
+                 th.nn.functional.log_softmax(clf_out_b, dim=1)), dim=1))
+
+
+def symmetric_kl_divergence(clf_out_a, clf_out_b):
+    kl_div_a_b = kl_divergence(clf_out_a, clf_out_b)
+    kl_div_b_a = kl_divergence(clf_out_b, clf_out_a)
+    return (kl_div_a_b + kl_div_b_a) / 2
+
+
+def soft_cross_entropy_from_logits(logits, target, reduction='mean'):
+    log_preds = th.log_softmax(logits, dim=1)
+    cents_per_example = -(target * log_preds).sum(dim=1)
+    if reduction == 'mean':
+        cents = th.mean(cents_per_example)
+    elif reduction == 'sum':
+        cents = th.sum(cents_per_example)
+    else:
+        assert reduction is None or reduction == 'none'
+        cents = cents_per_example
+    return cents
+
+def soft_cross_entropy(log_preds, target, reduction='mean'):
+    cents_per_example = -(target * log_preds).sum(dim=1)
+    if reduction == 'mean':
+        cents = th.mean(cents_per_example)
+    elif reduction == 'sum':
+        cents = th.sum(cents_per_example)
+    else:
+        assert reduction is None or reduction == 'none'
+        cents = cents_per_example
+    return cents
+
+
 def evaluate_clf(clf, X_opt_clf, X_orig_clf, y):
         clf_out_orig = clf(X_orig_clf)
         cross_ent_orig = th.nn.functional.cross_entropy(clf_out_orig, y)
         clf_out_opt = clf(X_opt_clf)
         cross_ent_opt = th.nn.functional.cross_entropy(clf_out_opt, y)
 
-        kldiv_orig_to_inv = th.mean(
-            th.sum(
-                th.nn.functional.softmax(clf_out_opt, dim=1) *
-                (th.nn.functional.log_softmax(clf_out_opt, dim=1) -
-                 th.nn.functional.log_softmax(clf_out_orig, dim=1)), dim=1))
-        kldiv_inv_to_orig = th.mean(
-            th.sum(
-                th.nn.functional.softmax(clf_out_orig, dim=1) *
-                (th.nn.functional.log_softmax(clf_out_orig, dim=1) -
-                 th.nn.functional.log_softmax(clf_out_opt, dim=1)), dim=1))
+        kldiv_orig_to_inv = kl_divergence(clf_out_opt, clf_out_orig)
+        kldiv_inv_to_orig = kl_divergence(clf_out_orig, clf_out_opt)
         return kldiv_orig_to_inv, kldiv_inv_to_orig, cross_ent_orig, cross_ent_opt
+
 
 def run_exp(
         lr_preproc,
