@@ -18,7 +18,7 @@ from nfnets.models.resnet import activation_fn
 from rtsutils.nb_util import NoOpResults
 from tqdm import tqdm,trange
 import sys#impadd
-from lossy.scheduler import AlsoScheduleWeightDecay
+from lossy.scheduler import AlsoScheduleWeightDecay, WarmupBefore
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,9 @@ def run_exp(
         np_th_seed,
         first_n,
         optim_type,
+        n_start_filters,
+        bias_for_conv,
+        n_warmup_epochs,
         debug,
         output_dir):
     assert optim_type in ['adam', 'adamw']
@@ -62,20 +65,41 @@ def run_exp(
     set_random_seeds(3434, True)
     nf_net = NFResNetCIFAR(BasicBlock, [2, 2, 2, 2], num_classes=10, activation='elu', alpha=0.2, beta=1.0,
                            zero_init_residual=zero_init_residual,
-                           base_conv=ScaledStdConv2d)
+                           base_conv=ScaledStdConv2d,
+                           n_start_filters=n_start_filters,
+                           bias_for_conv=bias_for_conv,)
     nf_net = nf_net.cuda()
 
+    params_with_weight_decay = []
+    params_without_weight_decay = []
+    for name, param in nf_net.named_parameters():
+        if 'weight' in name or 'gain' in name:
+            params_with_weight_decay.append(param)
+        else:
+            assert 'bias' in name
+            params_without_weight_decay.append(param)
+
     if optim_type == 'adam':
-        opt_nf_net = torch.optim.Adam(nf_net.parameters(), lr=lr, weight_decay=weight_decay)
+        opt_nf_net = torch.optim.Adam([
+            dict(params=params_with_weight_decay, weight_decay=weight_decay),
+            dict(params=params_without_weight_decay, weight_decay=0), ],
+            lr=lr, )
     else:
         assert optim_type == 'adamw'
-        opt_nf_net = torch.optim.AdamW(nf_net.parameters(), lr=lr, weight_decay=weight_decay)
+        opt_nf_net = torch.optim.AdamW([
+            dict(params=params_with_weight_decay, weight_decay=weight_decay),
+            dict(params=params_without_weight_decay, weight_decay=0), ],
+            lr=lr, )
 
     if restart_epochs is not None:
         scheduler = CosineAnnealingWarmRestarts(opt_nf_net, T_0=len(trainloader) * restart_epochs)
     else:
         # no scheduling
         scheduler = LambdaLR(opt_nf_net, lr_lambda=lambda *args: 1)
+    # impadd
+    if n_warmup_epochs > 0:
+        scheduler = WarmupBefore(scheduler, n_warmup_steps=len(trainloader) * n_warmup_epochs)
+    # end impadd
     if opt_nf_net.__class__.__name__ == 'AdamW':
         scheduler = AlsoScheduleWeightDecay(scheduler)
     else:
@@ -85,6 +109,9 @@ def run_exp(
         if 'Conv2d' in module.__class__.__name__:
             assert hasattr(module, 'weight')
             nn.init.__dict__[initialization + '_'](module.weight)
+    if hasattr(module, 'bias'):
+        module.bias.data.zero_()
+
     from itertools import islice
     if adjust_betas:
         # actually should et the zero init blcoks to 1 before, and afterwards to zero agian... according to paper logic
@@ -118,7 +145,7 @@ def run_exp(
                 module.scalar.data[:] = 0
 
     nb_res = NoOpResults(0.95)
-    for i_epoch in trange(n_epochs):
+    for i_epoch in trange(n_epochs+n_warmup_epochs):
         print(f"Epoch {i_epoch:d}")
         for X, y in tqdm(trainloader):
             X = X.cuda()
@@ -163,8 +190,11 @@ def run_exp(
                     writer.add_scalar(set_name + '_loss', mean_loss, i_epoch)
                     results[set_name + '_acc'] = acc * 100
                     results[set_name + '_loss'] = mean_loss
-                    writer.flush()
-                    sys.stdout.flush()
+
+                writer.add_scalar("learning_rate", opt_nf_net.param_groups[0]['lr'], i_epoch)
+                writer.add_scalar("weight_decay", opt_nf_net.param_groups[0]['weight_decay'], i_epoch)
+                writer.flush()
+                sys.stdout.flush()
     writer.close()
     return results
 

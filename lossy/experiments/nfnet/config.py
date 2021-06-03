@@ -33,7 +33,7 @@ def get_grid_param_list():
     }]
 
     train_params = dictlistprod({
-        'n_epochs': [300],
+        'n_epochs': [100],
         'batch_size': [64],
     })
 
@@ -45,14 +45,20 @@ def get_grid_param_list():
         'np_th_seed': range(0,3),
     })
 
+    model_params = dictlistprod({
+        'n_start_filters': [16,32,64],
+        'bias_for_conv': [True],
+    })
+
     optim_params = dictlistprod({
-        'lr': [1e-3,],#'lr': [1e-3, 5e-3,],
+        'lr': [5e-3,1e-2],#'lr': [1e-3, 5e-3,],
         'initialization': ['xavier_normal',],
-        'restart_epochs': [300],#[None,100,200],
+        'restart_epochs': [100],#[None,100,200],
         'adjust_betas': [True,],
         'zero_init_residual': [False],#Only False?
-        'weight_decay': [5e-3,5e-4,5e-5],
-        'optim_type': ['adam', 'adamw']
+        'weight_decay': [5e-5],
+        'optim_type': ['adam',],
+        'n_warmup_epochs': [5],
     })
     grid_params = product_of_list_of_lists_of_dicts([
         save_params,
@@ -60,6 +66,7 @@ def get_grid_param_list():
         train_params,
         random_params,
         debug_params,
+        model_params,
         optim_params,
     ])
 
@@ -83,6 +90,9 @@ def run(
         split_test_off_train,
         np_th_seed,
         optim_type,
+        n_start_filters,
+        bias_for_conv,
+        n_warmup_epochs,
         debug,):
     if debug:
         n_epochs = 3

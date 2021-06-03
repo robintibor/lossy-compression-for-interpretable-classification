@@ -230,20 +230,21 @@ def identity(x):
 
 
 class GateForward(nn.Module):
-    def __init__(self, name_to_alpha, ):
+    def __init__(self, name_to_alpha, nonlin=th.sigmoid):
         super().__init__()
         self.alphas = nn.ParameterList(name_to_alpha.values())
         # have to do like this to ensure alphas are correctly seen by higher
         self.names = list(name_to_alpha.keys())
+        self.nonlin = nonlin
 
     def forward(self, net, X, do_round, mix_alpha=None, pass_through_grad=True, just_return_alphas=False):
         if just_return_alphas:
             return self.alphas
         round_fn = [identity, round_with_gradient, ][do_round]
-        name_to_gates = {name: th.sigmoid(alpha).unsqueeze(-1).unsqueeze(-1)
+        name_to_gates = {name: self.nonlin(alpha)
                          for name, alpha in zip(self.names, self.alphas)}
         if mix_alpha is not None:
-            name_to_other_gates = {name: round_fn(th.sigmoid(alpha).unsqueeze(-1).unsqueeze(-1))
+            name_to_other_gates = {name: round_fn(self.nonlin(alpha))
                                    for name, alpha in mix_alpha.items()}
             if pass_through_grad:
                 name_to_gates_mixed = {name: (

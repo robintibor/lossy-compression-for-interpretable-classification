@@ -4,6 +4,20 @@ import numpy as np
 import kornia
 
 
+class FixedAugment(nn.Module):
+    def __init__(self, kornia_obj, X_shape):
+        super().__init__()
+        self.kornia_obj = kornia_obj
+        # fix bug with forward parameters for padding
+        if hasattr(kornia_obj, 'padding'):
+            assert kornia_obj.__class__.__name__ == 'RandomCrop'
+            padding = kornia_obj.padding
+            X_shape = X_shape[:2] + (X_shape[2] + padding, X_shape[3] + padding)
+        self.forward_parameters = self.kornia_obj.forward_parameters(X_shape)
+
+    def forward(self, X):
+        return self.kornia_obj(X, self.forward_parameters)
+
 class Augmenter(nn.Module):
     def __init__(self, contrast_factor, mix_grayscale_dists, demean,
                  expect_glow_range, std_noise_factor):
