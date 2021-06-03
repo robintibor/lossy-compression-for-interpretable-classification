@@ -72,7 +72,6 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         if module.groups != 1:
             raise NotImplementedError("Groups greater than 1 are not supported yet")
 
-        print("mat shape", mat.shape)
         V = mat.shape[0]
         N, C_out = module.output_shape[0], module.output_shape[1]
         C_in = module.input0_shape[1]
@@ -131,8 +130,6 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         Returns:
             torch.Tensor: individual gradients
         """
-        print("weight fn")
-        print("gain grad batch exists?", hasattr(module.gain, "grad_batch"))
         grad_on_computed_weight = module.grad_on_computed_weight
 
         del module.grad_on_computed_weight
@@ -154,11 +151,12 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         grad_w_s = 0.5 * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True)) / (n_params_per_w * th.sqrt(std * std))
         grad_w_1_div_s = -(1 / ((std + eps) * (std + eps))) * grad_w_s
         grad_w_1_div_s_flat = th.flatten(grad_w_1_div_s, start_dim=1)
-        grad_outer_w_w_through_s = (flat_w.unsqueeze(1) * grad_w_1_div_s_flat.unsqueeze(2))
 
         # unsqueeze(0) for example dim
-        grad_on_w_through_std = (grad_outer_w_w_through_s.unsqueeze(0) *
-                                 grad_outer_w_flat.unsqueeze(2)).sum(dim=3).reshape(n_x, *w.shape)
+        grad_on_factor_per_w_p = grad_outer_w_flat * flat_w.unsqueeze(0)
+
+        grad_on_w_through_std = (grad_on_factor_per_w_p.sum(dim=2, keepdim=True) *
+                                 grad_w_1_div_s_flat).reshape(n_x, *w.shape)
 
         grad_on_w_direct = grad_outer_w * (1 / (std.unsqueeze(0) + eps))
         grad_weight = grad_on_w_direct + grad_on_w_through_std
@@ -186,7 +184,7 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         return mat.sum(axes)
 
 
-class BatchGradMore(BackpropExtension):
+class BatchGradNFNets(BackpropExtension):
     """Individual gradients for each sample in a minibatch.
     Stores the output in ``grad_batch`` as a ``[N x ...]`` tensor,
     where ``N`` batch size and ``...`` is the shape of the gradient.
