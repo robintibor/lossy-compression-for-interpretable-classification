@@ -92,3 +92,9 @@ class ImageConverter(object):
         #assert img_orig.max().item() <= 1, f"img_orig nax was f{img_orig.max().item()}"
         return glow_img_to_img_0_1(img_glow)
 
+
+def standardize_per_example(alphas):
+    dims = tuple(range(1,len(alphas.shape)))
+    alphas = (alphas - alphas.mean(dim=dims, keepdim=True)) / (
+                alphas.std(dim=dims, keepdim=True))
+    return alphas

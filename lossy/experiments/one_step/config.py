@@ -2,6 +2,7 @@ import os
 os.sys.path.insert(0, '/home/schirrmr/code/utils/')
 os.sys.path.insert(0, '/home/schirrmr/code/lossy/')
 os.sys.path.insert(0, '/home/schirrmr/code/nfnets/')
+os.sys.path.insert(0, '/home/schirrmr/code/invertible-neurips/')
 import time
 import logging
 
@@ -25,7 +26,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/home/schirrmr/data/exps/lossy/cifar10-nfnets/',
+        'save_folder': '/home/schirrmr/data/exps/lossy/cifar10-one-step/',
     }]
 
     debug_params = [{
@@ -33,12 +34,7 @@ def get_grid_param_list():
     }]
 
     train_params = dictlistprod({
-        'n_epochs': [300],
-        'batch_size': [64],
-    })
-
-    data_params = dictlistprod({
-        'split_test_off_train': [False]
+        'n_epochs': [50],
     })
 
     random_params= dictlistprod({
@@ -47,23 +43,16 @@ def get_grid_param_list():
 
     model_params = dictlistprod({
         'n_start_filters': [64],
-        'bias_for_conv': [True],
+        'residual_preproc': [True,],
     })
-
     optim_params = dictlistprod({
-        'lr': [1e-3],#'lr': [1e-3, 5e-3,],
-        'initialization': ['xavier_normal',],
-        'restart_epochs': [300],#[None,100,200],
-        'adjust_betas': [True,],
-        'zero_init_residual': [False],#Only False?
-        'weight_decay': [5e-5],
+        'lr': [5e-4,1e-4],
+        'threshold': [0.1,],
         'optim_type': ['adam',],
-        'n_warmup_epochs': [5],
-        'drop_path': [0,0.1,0.2,0.4]
+        'bpd_weight': [0.1, 0.5, 1.0]
     })
     grid_params = product_of_list_of_lists_of_dicts([
         save_params,
-        data_params,
         train_params,
         random_params,
         debug_params,
@@ -78,24 +67,8 @@ def sample_config_params(rng, params):
     return params
 
 
-def run(
-        ex,
-        zero_init_residual,
-        initialization,
-        restart_epochs,
-        adjust_betas,
-        lr,
-        weight_decay,
-        n_epochs,
-        batch_size,
-        split_test_off_train,
-        np_th_seed,
-        optim_type,
-        n_start_filters,
-        bias_for_conv,
-        n_warmup_epochs,
-        drop_path,
-        debug,):
+def run(ex, n_epochs, optim_type, n_start_filters, residual_preproc,
+            lr, threshold, bpd_weight, np_th_seed, debug):
     if debug:
         n_epochs = 3
         first_n = 1024
@@ -114,7 +87,7 @@ def run(
                      level=logging.DEBUG, stream=sys.stdout)
     start_time = time.time()
     ex.info['finished'] = False
-    from lossy.experiments.nfnet.run import run_exp
+    from lossy.experiments.one_step.run import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()
