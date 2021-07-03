@@ -108,8 +108,8 @@ def get_dataset(dataset, data_path, batch_size=64, standardize=True, split_test_
     if split_test_off_train:
         n_train = len(dst_train)
         n_split = int(np.ceil(n_train * 0.8))
-        dst_test = torch.utils.data.Subset(dst_train, np.arange(n_split,n_train))
-        dst_train = torch.utils.data.Subset(dst_train, np.arange(0, n_split))
+        dst_test = torch.utils.data.Subset(deepcopy(dst_train), np.arange(n_split,n_train))
+        dst_train = torch.utils.data.Subset(deepcopy(dst_train), np.arange(0, n_split))
 
     trainloader = torch.utils.data.DataLoader(dst_train,
                                             batch_size=batch_size,

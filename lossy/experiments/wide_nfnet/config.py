@@ -35,10 +35,14 @@ def get_grid_param_list():
 
     train_params = dictlistprod({
         'n_epochs': [200],
+        'adaptive_gradient_clipping': [False],
+        'optim_type': ['adamw'],
+        'lr': [1e-3, 5e-4],
+        'weight_decay': [1e-5],
     })
 
     data_params = dictlistprod({
-        'split_test_off_train': [False, True],
+        'split_test_off_train': [False],
         'first_n': [None],
     })
 
@@ -47,7 +51,7 @@ def get_grid_param_list():
     })
 
     model_params = dictlistprod({
-        'nf_net': [True, False],
+        'nf_net': [True, ],#False
     })
 
     optim_params = dictlistprod({
@@ -76,6 +80,10 @@ def run(
         nf_net,
         np_th_seed,
         n_epochs,
+        adaptive_gradient_clipping,
+        optim_type,
+        lr,
+        weight_decay,
         debug,):
     if debug:
         n_epochs = 3
