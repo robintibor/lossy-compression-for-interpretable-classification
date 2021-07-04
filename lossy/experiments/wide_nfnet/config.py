@@ -52,6 +52,10 @@ def get_grid_param_list():
 
     model_params = dictlistprod({
         'nf_net': [True, ],#False
+        'depth': [10, 16],
+        'widen_factor': [2,4],
+        'dropout': [0.3],
+        'save_model': [True],
     })
 
     optim_params = dictlistprod({
@@ -84,6 +88,10 @@ def run(
         optim_type,
         lr,
         weight_decay,
+        depth,
+        widen_factor,
+        dropout,
+        save_model,
         debug,):
     if debug:
         n_epochs = 3

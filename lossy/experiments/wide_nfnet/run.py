@@ -28,6 +28,10 @@ def run_exp(
     optim_type,
     lr,
     weight_decay,
+    depth,
+    widen_factor,
+    dropout,
+    save_model,
     debug,
     output_dir,
 ):
@@ -38,9 +42,6 @@ def run_exp(
     writer.flush()
     assert not ((optim_type == 'adamw') and adaptive_gradient_clipping)
 
-    depth = 28
-    widen_factor = 10
-    dropout = 0.3
     dataset = "cifar10"
 
     set_random_seeds(np_th_seed, True)
@@ -225,5 +226,6 @@ def run_exp(
         print("| Elapsed time : %d:%02d:%02d" % (cf.get_hms(elapsed_time)))
     results = dict(**train_results, **test_results)
     writer.close()
-    #torch.save(net.state_dict(), os.path.join(output_dir, "nf_net_state_dict.th"),)
+    if save_model:
+        torch.save(net.state_dict(), os.path.join(output_dir, "nf_net_state_dict.th"),)
     return results
