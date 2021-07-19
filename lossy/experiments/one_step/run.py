@@ -26,6 +26,8 @@ from rtsutils.nb_util import NoOpResults
 from rtsutils.optim import grads_all_finite
 from rtsutils.util import np_to_th, th_to_np
 import logging
+import json
+
 log = logging.getLogger(__name__)
 
 
@@ -44,9 +46,21 @@ def run_exp(
     first_n,
     batch_size,
     weight_decay,
+    adjust_betas,
+    saved_model_folder,
+    save_models,
+    train_orig,
     debug,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
+    if saved_model_folder is not None:
+        assert model_name == 'wide_nf_net'
+    writer = SummaryWriter(output_dir)
+
+    hparams = {k: v for k, v in locals().items() if v is not None}
+    writer = SummaryWriter(output_dir)
+    writer.add_hparams(hparams, metric_dict={}, name=output_dir)
+    writer.flush()
     tqdm = lambda x: x
     trange = range
     set_random_seeds(np_th_seed, True)
@@ -56,11 +70,7 @@ def run_exp(
     n_warmup_epochs = 0
     bias_for_conv = True
     resample_augmentation = True
-    adjust_betas = True
 
-    writer = SummaryWriter(output_dir)
-
-    writer.flush()
     log.info("Load data...")
     data_path = "/home/schirrmr/data/pytorch-datasets/data/CIFAR10/"
     dataset = "CIFAR10"
@@ -92,10 +102,18 @@ def run_exp(
         depth = 28
         widen_factor = 10
         dropout = 0.3
+        if saved_model_folder is not None:
+            saved_model_config = json.load(open(os.path.join(saved_model_folder, 'config.json'), 'r'))
+            depth = saved_model_config['depth']
+            widen_factor = saved_model_config['widen_factor']
+            dropout = saved_model_config['dropout']
         from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
         nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes).cuda()
         nf_net.apply(conv_init)
+        if saved_model_folder is not None:
+            saved_clf_state_dict = th.load(os.path.join(saved_model_folder, 'nf_net_state_dict.th'))
+            nf_net.load_state_dict(saved_clf_state_dict)
     else:
         assert model_name == "nf_net"
         nf_net = NFResNetCIFAR(
@@ -110,11 +128,17 @@ def run_exp(
             n_start_filters=n_start_filters,
             bias_for_conv=bias_for_conv,
         )
+        for name, module in nf_net.named_modules():
+            if "Conv2d" in module.__class__.__name__:
+                assert hasattr(module, "weight")
+                nn.init.__dict__[initialization + "_"](module.weight)
+            if hasattr(module, "bias"):
+                module.bias.data.zero_()
     clf = nn.Sequential(normalize, nf_net)
     clf = clf.cuda()
 
-
     log.info("Create preprocessor...")
+
     def to_plus_minus_one(x):
         return (x * 2) - 1
 
@@ -151,7 +175,6 @@ def run_exp(
             AffineOnChans(3),
         ).cuda()
         preproc[2].factors.data[:] = 0.1
-
 
     log.info("Create optimizers...")
     params_with_weight_decay = []
@@ -190,12 +213,6 @@ def run_exp(
         preproc.parameters(), lr=lr_preproc, weight_decay=5e-5, betas=beta_preproc
     )
 
-    for name, module in clf.named_modules():
-        if "Conv2d" in module.__class__.__name__:
-            assert hasattr(module, "weight")
-            nn.init.__dict__[initialization + "_"](module.weight)
-        if hasattr(module, "bias"):
-            module.bias.data.zero_()
 
     def get_aug_m(X_shape):
         noise = th.randn(*X_shape, device="cuda") * 1e-3
@@ -213,7 +230,7 @@ def run_exp(
         return aug_m
 
     # Adjust betas to unit variance
-    if adjust_betas:
+    if adjust_betas and (saved_model_folder is None):
         # actually should et the zero init blcoks to 1 before, and afterwards to zero agian... according to paper logic
         for name, module in clf.named_modules():
             if module.__class__.__name__ == "ScalarMultiply":
@@ -266,6 +283,7 @@ def run_exp(
     nb_res = NoOpResults(0.95)
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
+            clf.train()
             X = X.cuda()
             y = y.cuda()
             aug_m = get_aug_m(X.shape)
@@ -278,6 +296,7 @@ def run_exp(
                 f_clf,
                 f_opt_clf,
             ):
+                random_state = torch.get_rng_state()
                 f_simple_out = f_clf(simple_X_aug)
                 f_simple_loss_before = th.nn.functional.cross_entropy(f_simple_out, y)
                 f_opt_clf.step(f_simple_loss_before)
@@ -285,21 +304,20 @@ def run_exp(
             # could resampe aug_m here if wanted
             if resample_augmentation:
                 aug_m = get_aug_m(X.shape)
+            torch.set_rng_state(random_state)
             f_simple_out = f_clf(simple_X_aug)
             f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
+            torch.set_rng_state(random_state)
             f_orig_out = f_clf(X_aug)
-            f_orig_loss = th.nn.functional.cross_entropy(f_orig_out, y)
+            f_orig_loss_per_ex = th.nn.functional.cross_entropy(f_orig_out, y, reduction='none')
 
             bpd = get_bpd(gen, simple_X)
-            bpd_loss = th.mean(bpd)
-            # im_loss = weighted_sum(1,1,f_simple_loss, 20, f_orig_loss, 1, bpd_loss)
-            bpd_factor = (
-                bpd_weight
-                * ((1 / threshold) * (threshold - f_orig_loss).clamp(0, 1)).detach()
-            )
+            bpd_factors = ((1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)).detach()
+            bpd_loss = th.mean(bpd * bpd_factors)
+            f_orig_loss = th.mean(f_orig_loss_per_ex)
             im_loss = weighted_sum(
-                1, 1, f_simple_loss, 10, f_orig_loss, bpd_factor, bpd_loss
+                1, 1, f_simple_loss_before, 1, f_simple_loss, 10, f_orig_loss, bpd_weight, bpd_loss
             )
 
             opt_preproc.zero_grad(set_to_none=True)
@@ -312,8 +330,14 @@ def run_exp(
                 simple_X = preproc(X)
                 simple_X_aug = aug_m(simple_X)
 
+            torch.set_rng_state(random_state)
             out = clf(simple_X_aug)
             clf_loss = th.nn.functional.cross_entropy(out, y)
+            if train_orig:
+                out_orig = clf(X_aug.detach())
+                clf_loss_orig = th.nn.functional.cross_entropy(out_orig, y)
+                clf_loss = (clf_loss + clf_loss_orig) / 2
+
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
             # Maybe keep grads for analysis?
@@ -337,6 +361,7 @@ def run_exp(
             nb_res.print()
             # with nb_res.output_area('lr'):
             #    print(f"LR: {opt_clf.param_groups[0]['lr']:.2E}")
+        clf.eval()
         nb_res.plot_df()
         with nb_res.output_area("accs_losses"):
             results = {}
@@ -400,19 +425,16 @@ def run_exp(
             X_preproced = preproc(X)
             # im = rescale(create_rgb_image(stack_images_in_rows(th_to_np(X), th_to_np(X_preproced), n_cols=16)), 2)
             # display(im)
-    with th.no_grad():
-        X, y = next(testloader.__iter__())
-        X = X.cuda()
-        if with_preproc:
-            X_preproced = preproc(X)
-        th.save(
-            X_preproced.detach().cpu(),
-            os.path.join(output_dir, "X_preproced.th"),
-        )
-        save_image(
-            X_preproced,
-            os.path.join(output_dir, "X_preproced.png"),
-            nrow=int(np.sqrt(len(X_preproced))),
-        )
-
+            th.save(
+                X_preproced.detach().cpu(),
+                os.path.join(output_dir, "X_preproced.th"),
+            )
+            save_image(
+                X_preproced,
+                os.path.join(output_dir, "X_preproced.png"),
+                nrow=int(np.sqrt(len(X_preproced))),
+            )
+    if save_models:
+        th.save(preproc.state_dict(), os.path.join(output_dir, 'preproc_state_dict.th'))
+        th.save(clf.state_dict(), os.path.join(output_dir, 'clf_state_dict.th'))
     return results

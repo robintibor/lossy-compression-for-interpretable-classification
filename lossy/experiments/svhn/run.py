@@ -26,21 +26,15 @@ def train_stage(
     trainloader,
     net_features,
     net_clf,
-    condensed_and_clfs,
     optim,
     n_epochs,
     loaders_per_dataset,
     writer,
     lr_schedule,
+    n_previous_epochs,
     crop_pad,
-    n_prev_epochs,
 ):
-    assert lr_schedule == "cosine"
-    if crop_pad > 0:
-        aug_fn = RandomCrop(size=(32, 32), padding=crop_pad)
-    else:
-        assert crop_pad == 0
-        aug_fn = nn.Identity()
+    aug_fn = RandomCrop(size=(32, 32), padding=crop_pad)
     for i_epoch in trange(n_epochs):
         nb_res = NoOpResults(0.98)
         if lr_schedule == "cosine":
@@ -54,6 +48,9 @@ def train_stage(
         net_features.train()
         for i_batch, (X, y) in enumerate(tqdm(trainloader)):
             optim.zero_grad(set_to_none=True)
+            # if i_epoch == 0:
+            #    for g in optim.param_groups:
+            #        g['lr'] = start_lr * (i_batch / len(trainloader))
             X = X.cuda()
             y = y.cuda()
             X = aug_fn(X)
@@ -61,23 +58,15 @@ def train_stage(
             out_clf = net_clf(out_features)
             loss = th.nn.functional.cross_entropy(out_clf, y)
             loss.backward()
-            for (
-                condensed_X,
-                condensed_y,
-            ), condensed_clf in condensed_and_clfs.values():
-                out_features = net_features(condensed_X)
-                out_clf = condensed_clf(out_features)
-                condensed_loss = th.nn.functional.cross_entropy(out_clf, condensed_y)
-                condensed_loss.backward()
 
             optim.step()
             optim.zero_grad(set_to_none=True)
             scheduler.step()
             res = dict(loss=loss.item())
-            if len(condensed_and_clfs) > 0:
-                res["condensed_loss"] = condensed_loss.item()
             nb_res.collect(**res)
             nb_res.print()
+        # if i_epoch % 5 == 4:
+        #    optim.param_groups[0]['lr'] = optim.param_groups[0]['lr'] * 0.5
 
         with th.no_grad():
             net_features.eval()
@@ -95,11 +84,7 @@ def train_stage(
                         X = X.cuda()
                         y = y.cuda()
                         out_features = net_features(X)
-                        if setname in condensed_and_clfs:
-                            this_clf = condensed_and_clfs[setname][1]
-                        else:
-                            this_clf = net_clf
-                        out_clf = this_clf(out_features)
+                        out_clf = net_clf(out_features)
                         pred_labels = out_clf.argmax(dim=1)
                         losses = th.nn.functional.cross_entropy(
                             out_clf, y, reduction="none"
@@ -121,7 +106,7 @@ def train_stage(
                     loss = (epochs_df.loss).mean()
                     print(f"{setname:6s} {fold_name[:5].capitalize()} Acc:  {acc:.1%}")
                     print(f"{setname:6s} {fold_name[:5].capitalize()} Loss: {loss:2f}")
-                    i_cumulated_epoch = i_epoch + n_prev_epochs
+                    i_cumulated_epoch = i_epoch + n_previous_epochs
                     writer.add_scalar(
                         f"{setname.lower()}_{fold_name[:5]}_acc", acc, i_cumulated_epoch
                     )
@@ -142,30 +127,22 @@ def run_exp(
     lrs,
     np_th_seed,
     first_n,
-    train_old_clfs,
-    reset_classifier,
-    same_clf_for_all,
-    lr_schedule,
-    SVHN_exp_id,
-    MNIST_exp_id,
-    n_repetitions_first_stage,
+    weight_decay,
+    assumed_std,
     crop_pad,
     debug,
 ):
     set_random_seeds(np_th_seed, True)
-    if same_clf_for_all:
-        assert not reset_classifier
-        assert train_old_clfs
 
     momentum = 0.9
-    decay = 0.0001
-    #SVHN_exp_id = 267
-    #MNIST_exp_id = 277
-    # USPS_exp_id = 290
+    decay = weight_decay
+    lr_schedule = "cosine"
     writer = SummaryWriter(output_dir)
     writer.flush()
 
-    dataset_order = ["SVHN", "MNIST", "USPS"]
+    dataset_order = [
+        "SVHN",
+    ]
 
     from collections import namedtuple
 
@@ -217,114 +194,42 @@ def run_exp(
         im_size=im_size,
     ).cuda()
     net_features = nn.Sequential(
-        Expression(lambda x: x - 0.5), net.features, nn.Flatten(start_dim=1)
+        Expression(lambda x: (x - 0.5) / assumed_std),
+        net.features,
+        nn.Flatten(start_dim=1),
     )
 
-    to_0_1 = lambda X, y: (th.sigmoid(X).cuda(), y.cuda())
-
-    condensed_per_dataset = {}
-    if SVHN_exp_id is not None:
-        condensed_per_dataset["SVHN"] = to_0_1(
-            *th.load(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/res_SVHN_ConvNet_10ipc.pt"
-            )["data"][0]
-        )
-    if MNIST_exp_id is not None:
-        condensed_per_dataset["MNIST"] = to_0_1(
-            *th.load(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/res_MNIST_ConvNet_10ipc.pt"
-            )["data"][0]
-        )
-        # 'USPS': to_0_1(*th.load(
-        # f'/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{USPS_exp_id:d}/res_USPS_ConvNet_10ipc.pt')['data'][0]),
-
-    condensed_results = {}
-    if SVHN_exp_id is not None:
-        condensed_results["svhn_bpd"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/info.json",
-                "r",
-            )
-        )["bpd"]
-        condensed_results["svhn_acc"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/info.json",
-                "r",
-            )
-        )["acc_mean"]
-    if MNIST_exp_id is not None:
-        condensed_results["mnist_bpd"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/info.json",
-                "r",
-            )
-        )["bpd"]
-        condensed_results["mnist_acc"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/info.json",
-                "r",
-            )
-        )["acc_mean"]
-
-    condensed_and_clfs = {}
     epoch_dfs_per_stage = []
-    n_epochs_so_far = 0
-    for i_dataset, dataset in enumerate(loaders_per_dataset):
-        print(f"Stage {i_dataset}")
-        optim = th.optim.SGD(
-            net.parameters(), lr=lrs[i_dataset], weight_decay=decay, momentum=momentum
+    # lr will be set inside train_stage during warmup
+    optim = th.optim.SGD(
+        net.parameters(), lr=lrs[0], weight_decay=decay, momentum=momentum
+    )
+    for i_stage, lr in enumerate(lrs):
+        print(f"Stage {i_stage}")
+        for g in optim.param_groups:
+            g["lr"] = lr
+        epoch_dfs_per_set = train_stage(
+            loaders_per_dataset["SVHN"].train,
+            net_features,
+            net.classifier,
+            optim,
+            n_epochs=n_epochs_per_stage,
+            loaders_per_dataset=loaders_per_dataset,
+            writer=writer,
+            lr_schedule=lr_schedule,
+            n_previous_epochs=n_epochs_per_stage * i_stage,
+            crop_pad=crop_pad,
         )
-        if train_old_clfs and (not same_clf_for_all):
-            for _, condensed_clf in condensed_and_clfs.values():
-                optim.add_param_group(dict(params=condensed_clf.parameters()))
-        n_repetitions = 1
-        if i_dataset == 0:
-            n_repetitions = n_repetitions_first_stage
-        for _ in range(n_repetitions):
-            # Reset LR, necessary in case of multiple repetitions
-            for g in optim.param_groups:
-                g['lr'] = lrs[i_dataset]
-            epoch_dfs_per_set = train_stage(
-                loaders_per_dataset[dataset].train,
-                net_features,
-                net.classifier,
-                condensed_and_clfs,
-                optim,
-                n_epochs=n_epochs_per_stage,
-                loaders_per_dataset=loaders_per_dataset,
-                writer=writer,
-                lr_schedule=lr_schedule,
-                crop_pad=crop_pad,
-                n_prev_epochs=n_epochs_so_far,
-            )
-            n_epochs_so_far += n_epochs_per_stage
         epoch_dfs_per_stage.append(epoch_dfs_per_set)
 
-        if i_dataset < (len(loaders_per_dataset) - 1):
-            if same_clf_for_all:
-                clf = net.classifier
-            else:
-                clf = deepcopy(net.classifier)
-            if dataset in condensed_per_dataset:
-                condensed_and_clfs[dataset] = (
-                    condensed_per_dataset[dataset],
-                    clf,
-                )
-            # maybe optional if to reset, else just deepcopy?
-            if reset_classifier:
-                net.classifier = nn.Linear(
-                    in_features=2048, out_features=10, bias=True
-                ).cuda()
-
     stage_results = {}
-    for i_dataset, dataset in enumerate(loaders_per_dataset):
-        epoch_dfs_per_set = epoch_dfs_per_stage[i_dataset]
-        relevant_epoch_dfs = []
-        for setname in dataset_order[: i_dataset + 1]:
-            relevant_epoch_dfs.append(epoch_dfs_per_set[setname])
-        assert len(relevant_epoch_dfs) == (i_dataset + 1)
+    for i_stage in range(len(lrs)):
+        epoch_dfs_this_stage = epoch_dfs_per_stage[i_stage]
+        relevant_epoch_dfs = [epoch_dfs_this_stage["SVHN"]]
         accs = {"train_det": [], "test": []}
         losses = {"train_det": [], "test": []}
+        #accs = {"test": []}
+        #losses = {"test": []}
         for fold_dfs in relevant_epoch_dfs:
             for fold, this_df in fold_dfs.items():
                 acc = (this_df.pred_labels == this_df.y).mean()
@@ -332,12 +237,19 @@ def run_exp(
                 accs[fold].append(acc)
                 losses[fold].append(loss)
         for fold in accs:
-            stage_results[f"T{i_dataset + 1}_{fold.replace('_det', '')}_acc"] = np.mean(
+            stage_results[f"T{i_stage + 1}_{fold.replace('_det', '')}_acc"] = np.mean(
                 accs[fold]
             )
-            stage_results[
-                f"T{i_dataset + 1}_{fold.replace('_det', '')}_loss"
-            ] = np.mean(losses[fold])
-    results = {**condensed_results, **stage_results}
-    writer.flush()
+            stage_results[f"T{i_stage + 1}_{fold.replace('_det', '')}_loss"] = np.mean(
+                losses[fold]
+            )
+        if i_stage == len(lrs) - 1:
+            stage_results[f"final_{fold.replace('_det', '')}_acc"] = np.mean(
+                accs[fold]
+            )
+            stage_results[f"final_{fold.replace('_det', '')}_loss"] = np.mean(
+                losses[fold]
+            )
+
+    results = {**stage_results}
     return results

@@ -125,6 +125,107 @@ def get_dataset(dataset, data_path, batch_size=64, standardize=True, split_test_
     return channel, im_size, num_classes, class_names, trainloader, train_det_loader, testloader
 
 
+def get_train_test_datasets(dataset, data_path, standardize):
+    if dataset == 'MNIST':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        if not standardize:
+            mean = [0]
+            std = [1]
+        else:
+            mean = [0.1307]
+            std = [0.3081]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std),
+                                        transforms.Resize(32, ),  # transforms.InterpolationMode.BILINEAR),
+                                        transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0))])
+        dst_train = torchvision.datasets.MNIST(data_path, train=True, download=False,
+                                               transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.MNIST(data_path, train=False, download=False, transform=transform)
+        class_names = [str(c) for c in range(num_classes)]
+
+    elif dataset == 'FashionMNIST':
+        channel = 1
+        im_size = (28, 28)
+        num_classes = 10
+        if not standardize:
+            mean = [0]
+            std = [1]
+        else:
+            mean = [0.2861]
+            std = [0.3530]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std),
+                                        transforms.Resize(32, ),  # transforms.InterpolationMode.BILINEAR),
+                                        transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0))])
+        dst_train = torchvision.datasets.FashionMNIST(data_path, train=True, download=False,
+                                                      transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.FashionMNIST(data_path, train=False, download=False, transform=transform)
+        class_names = dst_train.classes
+
+    elif dataset == 'SVHN':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        if not standardize:
+            mean = [0., 0., 0.]
+            std = [1, 1, 1]
+        else:
+            mean = [0.4377, 0.4438, 0.4728]
+            std = [0.1980, 0.2010, 0.1970]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torchvision.datasets.SVHN(data_path, split='train', download=False,
+                                              transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.SVHN(data_path, split='test', download=False, transform=transform)
+        class_names = [str(c) for c in range(num_classes)]
+
+    elif dataset == 'CIFAR10':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        if not standardize:
+            mean = [0., 0., 0.]
+            std = [1, 1, 1]
+        else:
+            mean = [0.4914, 0.4822, 0.4465]
+            std = [0.2023, 0.1994, 0.2010]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torchvision.datasets.CIFAR10(data_path, train=True, download=False,
+                                                 transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.CIFAR10(data_path, train=False, download=False, transform=transform)
+        class_names = dst_train.classes
+    elif dataset == 'CIFAR100':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 100
+        if not standardize:
+            mean = [0., 0., 0.]
+            std = [1, 1, 1]
+        else:
+            assert False, "need to check values"
+            mean = [0.4914, 0.4822, 0.4465]
+            std = [0.2023, 0.1994, 0.2010]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torchvision.datasets.CIFAR100(data_path, train=True, download=False,
+                                                  transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.CIFAR100(data_path, train=False, download=False, transform=transform)
+        class_names = dst_train.classes
+    elif dataset == 'USPS':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        assert not standardize
+        transform = transforms.Compose([transforms.ToTensor(),
+                                        transforms.Resize(32, ),  # transforms.InterpolationMode.BILINEAR),
+                                        transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0))])
+        dst_train = torchvision.datasets.USPS(data_path, train=True, download=False,
+                                              transform=transform)  # no augmentation
+        dst_test = torchvision.datasets.USPS(data_path, train=False, download=False, transform=transform)
+        class_names = [str(c) for c in range(num_classes)]
+    else:
+        raise NotImplementedError('unknown dataset: %s' % dataset)
+    return dst_train, dst_test
+
+
 class MixedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_a, dataset_b, mix_x_func, ):
         self.dataset_a = dataset_a
