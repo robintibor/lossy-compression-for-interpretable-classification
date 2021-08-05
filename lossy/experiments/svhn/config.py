@@ -45,11 +45,13 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             "n_epochs_per_stage": [
-                50, #100
+                50, 100
             ],
             "weight_decay": [1e-4,],  # 5e-4,
             "assumed_std": [1],#[0.5,0.3,0.2],
             "crop_pad": [0,1,2,3,4],
+            "original_augment": [False],
+            "lr_schedule": ["cosine", "constant"]
         }
     )
 
@@ -68,9 +70,8 @@ def get_grid_param_list():
               #  [0.1, 0.01, 0.001],
               #  [0.1, 0.1, 0.1],
               #  [0.01, 0.01, 0.01],
-                [0.01,0.01],
-                [0.01, 0.01, 0.01, 0.01],
-                [0.01, 0.01, 0.01, 0.01,0.01,0.01],
+                [0.01] * 6,
+                [0.1 * (0.5 ** i_stage) for i_stage in range(6)]
                 ],
         }
     )
@@ -100,6 +101,8 @@ def run(
     weight_decay,
     assumed_std,
     crop_pad,
+    original_augment,
+    lr_schedule,
     debug,
 ):
     if debug:

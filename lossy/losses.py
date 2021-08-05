@@ -1,6 +1,7 @@
 import torch as th
 
 def kl_divergence(clf_out_a, clf_out_b):
+    assert clf_out_a.shape == clf_out_b.shape
     return th.mean(
             th.sum(
                 th.nn.functional.softmax(clf_out_a, dim=1) *

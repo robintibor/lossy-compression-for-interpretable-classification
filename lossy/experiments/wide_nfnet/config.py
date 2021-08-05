@@ -26,7 +26,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/',
+        'save_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/',
     }]
 
     debug_params = [{
@@ -37,13 +37,14 @@ def get_grid_param_list():
         'n_epochs': [200],
         'adaptive_gradient_clipping': [False],
         'optim_type': ['adamw'],
-        'lr': [1e-3, 5e-4],
+        'lr': [1e-3],
         'weight_decay': [1e-5],
     })
 
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
+        "dataset": ['mnist', 'fashionmnist']
     })
 
     random_params= dictlistprod({
@@ -52,10 +53,12 @@ def get_grid_param_list():
 
     model_params = dictlistprod({
         'nf_net': [True, ],#False
-        'depth': [10, 16],
-        'widen_factor': [2,4],
+        'depth': [16],
+        'widen_factor': [2],
         'dropout': [0.3],
         'save_model': [True],
+        'activation': ["relu"],
+
     })
 
     optim_params = dictlistprod({
@@ -91,7 +94,9 @@ def run(
         depth,
         widen_factor,
         dropout,
+        activation,
         save_model,
+        dataset,
         debug,):
     if debug:
         n_epochs = 3

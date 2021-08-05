@@ -46,7 +46,7 @@ def get_grid_param_list():
         {
             "n_epochs": [50],
             "batch_size": [32],
-            "train_orig": [True],
+            "train_orig": [False],
         }
     )
 
@@ -64,7 +64,8 @@ def get_grid_param_list():
             ],
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
-            "saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'],
+            #114 before
+            "saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/122/'],
             'save_models': [False],
         }
     )

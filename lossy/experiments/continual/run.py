@@ -6,6 +6,7 @@ import pandas as pd
 import torch as th
 from braindecode.models.modules import Expression
 from braindecode.util import set_random_seeds
+from kornia.augmentation import RandomCrop
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
@@ -14,9 +15,9 @@ from torchvision import transforms
 from datasetcondensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.scheduler import WarmupBefore
+from lossy.losses import soft_cross_entropy_from_logits
 from rtsutils.nb_util import NoOpResults
 from rtsutils.util import th_to_np
-from kornia.augmentation import RandomCrop
 
 trange = range
 tqdm = lambda x: x
@@ -26,7 +27,7 @@ def train_stage(
     trainloader,
     net_features,
     net_clf,
-    condensed_and_clfs,
+    condensed_and_old_nets,
     optim,
     n_epochs,
     loaders_per_dataset,
@@ -34,6 +35,7 @@ def train_stage(
     lr_schedule,
     crop_pad,
     n_prev_epochs,
+    add_distillation_loss,
 ):
     assert lr_schedule == "cosine"
     if crop_pad > 0:
@@ -60,21 +62,48 @@ def train_stage(
             out_features = net_features(X)
             out_clf = net_clf(out_features)
             loss = th.nn.functional.cross_entropy(out_clf, y)
+            # impadd
+            distill_temperature = 2
+            if add_distillation_loss:
+                for d in condensed_and_old_nets.values():
+                    with th.no_grad():
+                        out_old = d["clf"](d["net_features"](X))
+                        old_labels = th.softmax(out_old / distill_temperature, dim=1)
+                    out_old_with_new_features = d["clf"](out_features)
+                    distill_loss = soft_cross_entropy_from_logits(
+                        out_old_with_new_features / distill_temperature, old_labels
+                    )
+                    loss = loss + distill_loss
+                loss = loss / (1 + len(condensed_and_old_nets))
+
             loss.backward()
-            for (
-                condensed_X,
-                condensed_y,
-            ), condensed_clf in condensed_and_clfs.values():
+            # impadd
+            for d in condensed_and_old_nets.values():
+                condensed_X, condensed_y = d["Xy"]
                 out_features = net_features(condensed_X)
-                out_clf = condensed_clf(out_features)
+                out_clf = d["clf"](out_features)
                 condensed_loss = th.nn.functional.cross_entropy(out_clf, condensed_y)
+                if add_distillation_loss:
+                    for d in condensed_and_old_nets.values():
+                        with th.no_grad():
+                            out_old = d["clf"](d["net_features"](condensed_X))
+                            old_labels = th.softmax(
+                                out_old / distill_temperature, dim=1
+                            )
+                        out_old_with_new_features = d["clf"](out_features)
+                        distill_loss = soft_cross_entropy_from_logits(
+                            out_old_with_new_features / distill_temperature, old_labels
+                        )
+                        condensed_loss = condensed_loss + distill_loss
+                    condensed_loss = condensed_loss / (1 + len(condensed_and_old_nets))
+
                 condensed_loss.backward()
 
             optim.step()
             optim.zero_grad(set_to_none=True)
             scheduler.step()
             res = dict(loss=loss.item())
-            if len(condensed_and_clfs) > 0:
+            if len(condensed_and_old_nets) > 0:
                 res["condensed_loss"] = condensed_loss.item()
             nb_res.collect(**res)
             nb_res.print()
@@ -95,8 +124,8 @@ def train_stage(
                         X = X.cuda()
                         y = y.cuda()
                         out_features = net_features(X)
-                        if setname in condensed_and_clfs:
-                            this_clf = condensed_and_clfs[setname][1]
+                        if setname in condensed_and_old_nets:
+                            this_clf = condensed_and_old_nets[setname]["clf"]
                         else:
                             this_clf = net_clf
                         out_clf = this_clf(out_features)
@@ -150,6 +179,7 @@ def run_exp(
     MNIST_exp_id,
     n_repetitions_first_stage,
     crop_pad,
+    add_distillation_loss,
     debug,
 ):
     set_random_seeds(np_th_seed, True)
@@ -159,8 +189,8 @@ def run_exp(
 
     momentum = 0.9
     decay = 0.0001
-    #SVHN_exp_id = 267
-    #MNIST_exp_id = 277
+    # SVHN_exp_id = 267
+    # MNIST_exp_id = 277
     # USPS_exp_id = 290
     writer = SummaryWriter(output_dir)
     writer.flush()
@@ -266,7 +296,8 @@ def run_exp(
             )
         )["acc_mean"]
 
-    condensed_and_clfs = {}
+    # impadd
+    condensed_and_old_nets = {}
     epoch_dfs_per_stage = []
     n_epochs_so_far = 0
     for i_dataset, dataset in enumerate(loaders_per_dataset):
@@ -275,8 +306,9 @@ def run_exp(
             net.parameters(), lr=lrs[i_dataset], weight_decay=decay, momentum=momentum
         )
         if train_old_clfs and (not same_clf_for_all):
-            for _, condensed_clf in condensed_and_clfs.values():
-                optim.add_param_group(dict(params=condensed_clf.parameters()))
+            # impadd
+            for d in condensed_and_old_nets.values():
+                optim.add_param_group(dict(params=d['clf'].parameters()))
         n_repetitions = 1
         if i_dataset == 0:
             n_repetitions = n_repetitions_first_stage
@@ -288,7 +320,8 @@ def run_exp(
                 loaders_per_dataset[dataset].train,
                 net_features,
                 net.classifier,
-                condensed_and_clfs,
+                # impadd
+                condensed_and_old_nets,
                 optim,
                 n_epochs=n_epochs_per_stage,
                 loaders_per_dataset=loaders_per_dataset,
@@ -296,6 +329,7 @@ def run_exp(
                 lr_schedule=lr_schedule,
                 crop_pad=crop_pad,
                 n_prev_epochs=n_epochs_so_far,
+                add_distillation_loss=add_distillation_loss,
             )
             n_epochs_so_far += n_epochs_per_stage
         epoch_dfs_per_stage.append(epoch_dfs_per_set)
@@ -306,9 +340,11 @@ def run_exp(
             else:
                 clf = deepcopy(net.classifier)
             if dataset in condensed_per_dataset:
-                condensed_and_clfs[dataset] = (
-                    condensed_per_dataset[dataset],
-                    clf,
+                # impadd
+                condensed_and_old_nets[dataset] = dict(
+                    Xy=condensed_per_dataset[dataset],
+                    net_features=deepcopy(net_features),
+                    clf=clf,
                 )
             # maybe optional if to reset, else just deepcopy?
             if reset_classifier:

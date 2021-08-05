@@ -42,6 +42,7 @@ def train_stage(
                 optim, T_0=len(trainloader) * (n_epochs - 1)
             )
         else:
+            assert lr_schedule == 'constant'
             # No scheduling
             scheduler = LambdaLR(optim, lr_lambda=lambda *args: 1)
         scheduler = WarmupBefore(scheduler, n_warmup_steps=len(trainloader) * 1)
@@ -130,13 +131,15 @@ def run_exp(
     weight_decay,
     assumed_std,
     crop_pad,
+    lr_schedule,
+    original_augment,
     debug,
 ):
+    assert lr_schedule in ["cosine", "constant"]
     set_random_seeds(np_th_seed, True)
 
     momentum = 0.9
     decay = weight_decay
-    lr_schedule = "cosine"
     writer = SummaryWriter(output_dir)
     writer.flush()
 
@@ -163,14 +166,15 @@ def run_exp(
             standardize=False,
             first_n=first_n,
         )
-        if first_n is None:
-            trainloader.dataset.transforms.transform.transforms.insert(
-                0, transforms.RandomAffine(0, translate=(0.1, 0.1))
-            )
-        else:
-            trainloader.dataset.dataset.transforms.transform.transforms.insert(
-                0, transforms.RandomAffine(0, translate=(0.1, 0.1))
-            )
+        if original_augment:
+            if first_n is None:
+                trainloader.dataset.transforms.transform.transforms.insert(
+                    0, transforms.RandomAffine(0, translate=(0.1, 0.1))
+                )
+            else:
+                trainloader.dataset.dataset.transforms.transform.transforms.insert(
+                    0, transforms.RandomAffine(0, translate=(0.1, 0.1))
+                )
 
         loaders_per_dataset[dataset_name] = namedtuple(
             "Loaders", ["train", "train_det", "test"]

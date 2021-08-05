@@ -102,14 +102,17 @@ def run_exp(
         depth = 28
         widen_factor = 10
         dropout = 0.3
+        activation = 'elu' # was relu in past
         if saved_model_folder is not None:
             saved_model_config = json.load(open(os.path.join(saved_model_folder, 'config.json'), 'r'))
             depth = saved_model_config['depth']
             widen_factor = saved_model_config['widen_factor']
             dropout = saved_model_config['dropout']
+            activation = saved_model_config['activation'] # default was relu
         from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
-        nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes).cuda()
+        nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
+                               activation=activation).cuda()
         nf_net.apply(conv_init)
         if saved_model_folder is not None:
             saved_clf_state_dict = th.load(os.path.join(saved_model_folder, 'nf_net_state_dict.th'))

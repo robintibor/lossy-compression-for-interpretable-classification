@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 
 def run_exp(
+    dataset,
     first_n,
     split_test_off_train,
     nf_net,
@@ -31,6 +32,7 @@ def run_exp(
     depth,
     widen_factor,
     dropout,
+    activation,
     save_model,
     debug,
     output_dir,
@@ -41,8 +43,6 @@ def run_exp(
     writer.add_hparams(hparams, metric_dict={}, name=output_dir)
     writer.flush()
     assert not ((optim_type == 'adamw') and adaptive_gradient_clipping)
-
-    dataset = "cifar10"
 
     set_random_seeds(np_th_seed, True)
     # Hyper Parameter settings
@@ -58,29 +58,55 @@ def run_exp(
         train_det_loader,
         testloader,
     ) = get_dataset(
-        "CIFAR10",
-        "/home/schirrmr/data/pytorch-datasets/data/CIFAR10/",
+        dataset.upper(),
+        "/home/schirrmr/data/pytorch-datasets/",
         standardize=False,
         first_n=first_n,
         batch_size=batch_size,
         eval_batch_size=512,
         split_test_off_train=split_test_off_train,
     )
-    transform_train = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
-        ]
-    )  # meanstd transformation
+    if dataset in ['cifar10', 'cifar100']:
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+            ]
+        )  # meanstd transformation
+    else:
+        assert dataset in ['mnist', 'fashionmnist']
+        transform_train = transforms.Compose(
+            [
+                transforms.Resize(
+                    32,
+                ),  # transforms.InterpolationMode.BILINEAR),
+                transforms.RandomCrop(32, padding=4),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
+                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+            ]
+        )  # meanstd transformation
+    if dataset in ['cifar10', 'cifar100']:
+        transform_test = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+            ]
+        )
+    else:
+        transform_test = transforms.Compose(
+            [
+                transforms.Resize(
+                    32,
+                ),  # transforms.InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
+                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+            ]
+        )
 
-    transform_test = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
-        ]
-    )
     train_set = trainloader.dataset
     test_set = testloader.dataset
     if first_n is not None:
@@ -101,7 +127,8 @@ def run_exp(
     if nf_net:
         from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
-        net = Wide_NFResNet(depth, widen_factor, dropout, num_classes).cuda()
+        net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
+                            activation=activation).cuda()
         file_name = f"wide-nfresnet-{depth:d}x{widen_factor:d}"
         net.apply(conv_init)
     else:
@@ -213,7 +240,8 @@ def run_exp(
 
     elapsed_time = 0
     if optim_type == 'adamw':
-        optimizer = optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay, eps=1e-7)
+        optimizer = optim.AdamW(
+            net.parameters(), lr=lr, weight_decay=weight_decay, eps=1e-7)
 
     for epoch in range(0, n_epochs):
         start_time = time.time()
@@ -226,6 +254,6 @@ def run_exp(
         print("| Elapsed time : %d:%02d:%02d" % (cf.get_hms(elapsed_time)))
     results = dict(**train_results, **test_results)
     writer.close()
-    if save_model:
+    if (not debug) and (save_model):
         torch.save(net.state_dict(), os.path.join(output_dir, "nf_net_state_dict.th"),)
     return results
