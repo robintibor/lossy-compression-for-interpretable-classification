@@ -298,7 +298,7 @@ def run_exp(
     gen = nn.Sequential()
     gen.add_module("to_glow_range", Expression(img_0_1_to_glow_img))
     if noise_before_generator:
-        gen.add_module("add_noise", add_glow_noise)
+        gen.add_module("add_noise", Expression(add_glow_noise))
     gen.add_module("glow", glow)
 
     def get_bpd(gen, X):

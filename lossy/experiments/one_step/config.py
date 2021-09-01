@@ -52,11 +52,23 @@ def get_grid_param_list():
             "n_epochs": [50],
             "batch_size": [32],
             "train_orig": [False],
-            "noise_augment_level": [0],
-            "noise_after_simplifier": [True, False],
-            "noise_before_generator": [True, False],
         }
     )
+
+    noise_params = [{
+            "noise_augment_level": 0,
+            "noise_after_simplifier": True,
+            "noise_before_generator": False,
+        }, {
+            "noise_augment_level": 0,
+            "noise_after_simplifier": False,
+            "noise_before_generator": True,
+        }, {
+            "noise_augment_level": 0,
+            "noise_after_simplifier": False,
+            "noise_before_generator": False,
+        },
+    ]
 
     random_params = dictlistprod(
         {
@@ -103,6 +115,7 @@ def get_grid_param_list():
             model_params,
             optim_params,
             data_params,
+            noise_params,
         ]
     )
 
