@@ -3,6 +3,7 @@ os.sys.path.insert(0, '/home/schirrmr/code/utils/')
 os.sys.path.insert(0, '/home/schirrmr/code/lossy/')
 os.sys.path.insert(0, '/home/schirrmr/code/nfnets/')
 os.sys.path.insert(0, '/home/schirrmr/code/cifar10-clf/')
+os.sys.path.insert(0, '/home/schirrmr/code/sam-optim/')
 import time
 import logging
 
@@ -26,7 +27,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/',
+        'save_folder': '/home/schirrmr/data/exps/lossy/cifar100-wide-nfnets/',
     }]
 
     debug_params = [{
@@ -36,15 +37,15 @@ def get_grid_param_list():
     train_params = dictlistprod({
         'n_epochs': [200],
         'adaptive_gradient_clipping': [False],
-        'optim_type': ['adamw'],
-        'lr': [1e-3],
+        'optim_type': ['sam'],
+        'lr': [1e-1,5e-2,1e-2,5e-3],
         'weight_decay': [1e-5],
     })
 
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['mnist', 'fashionmnist']
+        "dataset": ['cifar100']
     })
 
     random_params= dictlistprod({
@@ -54,11 +55,10 @@ def get_grid_param_list():
     model_params = dictlistprod({
         'nf_net': [True, ],#False
         'depth': [16],
-        'widen_factor': [2],
+        'widen_factor': [2,10],
         'dropout': [0.3],
         'save_model': [True],
         'activation': ["relu"],
-
     })
 
     optim_params = dictlistprod({

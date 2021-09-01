@@ -158,6 +158,31 @@ def get_dataset(
             data_path, train=False, download=False, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
+    elif dataset == "CELEBA":
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 40
+        transform = transforms.Compose(
+            [
+                transforms.Resize(
+                    (32,32),
+                ),  # transforms.InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+            ]
+        )
+        dst_train = torchvision.datasets.CelebA(
+            root=data_path,
+            target_type='attr',
+            download=False,
+            transform=transform,
+            split='train')
+        dst_test = torchvision.datasets.CelebA(
+            root=data_path,
+            target_type='attr',
+            download=False,
+            transform=transform,
+            split='valid')
+        class_names = dst_train.attr_names
     else:
         raise NotImplementedError("unknown dataset: %s" % dataset)
 

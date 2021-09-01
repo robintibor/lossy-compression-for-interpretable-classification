@@ -1,12 +1,19 @@
 import torch as th
 
-def kl_divergence(clf_out_a, clf_out_b):
+def kl_divergence(clf_out_a, clf_out_b, reduction='mean'):
     assert clf_out_a.shape == clf_out_b.shape
-    return th.mean(
-            th.sum(
+    kl_divs_per_example = th.sum(
                 th.nn.functional.softmax(clf_out_a, dim=1) *
                 (th.nn.functional.log_softmax(clf_out_a, dim=1) -
-                 th.nn.functional.log_softmax(clf_out_b, dim=1)), dim=1))
+                 th.nn.functional.log_softmax(clf_out_b, dim=1)), dim=1)
+    if reduction == 'mean':
+        kl_div = th.mean(kl_divs_per_example)
+    elif reduction == 'sum':
+        kl_div = th.sum(kl_divs_per_example)
+    else:
+        assert reduction is None or reduction == 'none'
+        kl_div = kl_divs_per_example
+    return kl_div
 
 
 def symmetric_kl_divergence(clf_out_a, clf_out_b):

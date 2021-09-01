@@ -32,7 +32,8 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/cifar10-one-step/",
+                           #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
 
@@ -42,11 +43,18 @@ def get_grid_param_list():
         }
     ]
 
+    data_params = dictlistprod({
+        'dataset': ['cifar10'],
+    })
+
     train_params = dictlistprod(
         {
             "n_epochs": [50],
             "batch_size": [32],
             "train_orig": [False],
+            "noise_augment_level": [0],
+            "noise_after_simplifier": [True, False],
+            "noise_before_generator": [True, False],
         }
     )
 
@@ -65,14 +73,16 @@ def get_grid_param_list():
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
             #114 before
-            "saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/122/'],
-            'save_models': [False],
+            # 21 for fashionmnist
+            #"saved_model_folder": ['/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/20/'],
+            "saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'],
+            'save_models': [True],
         }
     )
     optim_params = dictlistprod(
         {
             "weight_decay": [1e-5],
-            "lr_clf": [1e-4, 5e-4],#5e-4,
+            "lr_clf": [5e-4],#5e-4,
             "lr_preproc": [5e-4],
             "threshold": [
                 0.1,
@@ -80,7 +90,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0., 0.1, 0.5, 1.0, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
+            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
         }
     )
 
@@ -92,6 +102,7 @@ def get_grid_param_list():
             debug_params,
             model_params,
             optim_params,
+            data_params,
         ]
     )
 
@@ -119,8 +130,12 @@ def run(
     adjust_betas,
     saved_model_folder,
     train_orig,
+    dataset,
     debug,
     save_models,
+    noise_before_generator,
+    noise_after_simplifier,
+    noise_augment_level,
 ):
     if debug:
         n_epochs = 3

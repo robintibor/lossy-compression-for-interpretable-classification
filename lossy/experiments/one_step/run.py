@@ -25,10 +25,20 @@ from nfnets.models.resnet import activation_fn
 from rtsutils.nb_util import NoOpResults
 from rtsutils.optim import grads_all_finite
 from rtsutils.util import np_to_th, th_to_np
+import wide_resnet.config as cf
 import logging
 import json
 
 log = logging.getLogger(__name__)
+
+
+def add_glow_noise(x):
+    return x + th.rand_like(x) * 1/256.0
+
+
+def add_glow_noise_to_0_1(x):
+    # later will be multiplied with 255/256.0
+    return x + th.rand_like(x) * 1/255.0
 
 
 def run_exp(
@@ -50,7 +60,11 @@ def run_exp(
     saved_model_folder,
     save_models,
     train_orig,
+    dataset,
     debug,
+    noise_before_generator,
+    noise_after_simplifier,
+    noise_augment_level,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
@@ -72,8 +86,7 @@ def run_exp(
     resample_augmentation = True
 
     log.info("Load data...")
-    data_path = "/home/schirrmr/data/pytorch-datasets/data/CIFAR10/"
-    dataset = "CIFAR10"
+    data_path = "/home/schirrmr/data/pytorch-datasets/"
     (
         channel,
         im_size,
@@ -83,7 +96,7 @@ def run_exp(
         train_det_loader,
         testloader,
     ) = get_dataset(
-        dataset,
+        dataset.upper(),
         data_path,
         batch_size=batch_size,
         standardize=False,
@@ -91,9 +104,10 @@ def run_exp(
         first_n=first_n,
     )
 
+
     log.info("Create classifier...")
-    mean = [0.4914, 0.4822, 0.4465]
-    std = [0.2023, 0.1994, 0.2010]
+    mean = cf.mean[dataset]
+    std = cf.mean[dataset]
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
@@ -108,7 +122,8 @@ def run_exp(
             depth = saved_model_config['depth']
             widen_factor = saved_model_config['widen_factor']
             dropout = saved_model_config['dropout']
-            activation = saved_model_config['activation'] # default was relu
+            activation = saved_model_config.get('activation', 'relu') # default was relu
+            assert saved_model_config.get('dataset', 'cifar10') == dataset
         from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
         nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
@@ -163,7 +178,8 @@ def run_exp(
             final_nonlin=nn.Sigmoid(),
         ).cuda()
     else:
-
+        assert False, "please check comment below"
+        # noinspection PyUnreachableCode
         preproc = nn.Sequential(
             Expression(to_plus_minus_one),
             UnetGenerator(
@@ -175,10 +191,11 @@ def run_exp(
                 nonlin_down=nn.ELU,
                 nonlin_up=nn.ELU,
             ),
-            AffineOnChans(3),
+            AffineOnChans(3), # Does this even make sense after sigmoid?
         ).cuda()
         preproc[2].factors.data[:] = 0.1
-
+    if noise_after_simplifier:
+        preproc.add_module("noise", Expression(add_glow_noise_to_0_1))
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []
@@ -218,18 +235,22 @@ def run_exp(
 
 
     def get_aug_m(X_shape):
-        noise = th.randn(*X_shape, device="cuda") * 1e-3
-        aug_m = nn.Sequential(
-            FixedAugment(
-                kornia.augmentation.RandomCrop(
-                    (32, 32),
-                    padding=4,
-                ),
-                X_shape,
-            ),
-            FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
-            Expression(lambda x: x + noise),
-        )
+        noise = th.randn(*X_shape, device="cuda") * noise_augment_level
+        aug_m = nn.Sequential()
+        aug_m.add_module('crop', FixedAugment(
+                    kornia.augmentation.RandomCrop(
+                        (32, 32),
+                        padding=4,
+                    ),
+                    X_shape,
+                ),)
+
+        if dataset in ['cifar10', 'cifar100']:
+            aug_m.add_module('hflip', FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape))
+        else:
+            assert dataset in ['mnist', 'fashionmnist']
+        aug_m.add_module('noise', Expression(lambda x: x + noise))
+
         return aug_m
 
     # Adjust betas to unit variance
@@ -274,7 +295,11 @@ def run_exp(
         "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/10/10_model.th"
     )
 
-    gen = nn.Sequential(Expression(img_0_1_to_glow_img), glow)
+    gen = nn.Sequential()
+    gen.add_module("to_glow_range", Expression(img_0_1_to_glow_img))
+    if noise_before_generator:
+        gen.add_module("add_noise", add_glow_noise)
+    gen.add_module("glow", glow)
 
     def get_bpd(gen, X):
         n_dims = np.prod(X.shape[1:])

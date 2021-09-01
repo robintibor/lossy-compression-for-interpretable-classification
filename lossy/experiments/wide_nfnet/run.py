@@ -14,6 +14,7 @@ import os.path
 
 from lossy.datasets import get_dataset
 from lossy.optim import SGD_AGC
+from sam_optim.sam import SAM
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def run_exp(
     debug,
     output_dir,
 ):
-    assert optim_type in ['sgd', 'adamw']
+    assert optim_type in ['sgd', 'adamw', 'sam']
     hparams = {k: v for k, v in locals().items() if v is not None}
     writer = SummaryWriter(output_dir)
     writer.add_hparams(hparams, metric_dict={}, name=output_dir)
@@ -161,6 +162,10 @@ def run_exp(
                     momentum=0.9,
                     weight_decay=weight_decay,
                 )
+        #impadd
+        elif optim_type == 'sam':
+            base_optimizer = torch.optim.SGD  # define an optimizer for the "sharpness-aware" update
+            inner_optim = SAM(net.parameters(), base_optimizer, lr=cf.learning_rate(lr, epoch), momentum=0.9)
         else:
             assert optim_type == 'adamw'
             inner_optim = optimizer
@@ -173,7 +178,15 @@ def run_exp(
             outputs = net(inputs)  # Forward Propagation
             loss = criterion(outputs, targets)  # Loss
             loss.backward()  # Backward Propagation
-            inner_optim.step()  # Optimizer update
+            if optim_type == 'sam':
+                inner_optim.first_step(zero_grad=True)
+                outputs = net(inputs)  # Forward Propagation
+                loss = criterion(outputs, targets)  # Loss
+                loss.backward()
+                # second forward-backward pass
+                inner_optim.second_step(zero_grad=True)
+            else:
+                inner_optim.step()  # Optimizer update
             inner_optim.zero_grad(set_to_none=True)
 
             train_loss += loss.item() * targets.size(0)
