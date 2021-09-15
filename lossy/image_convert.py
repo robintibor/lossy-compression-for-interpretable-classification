@@ -37,16 +37,20 @@ def cifar10_standardized_to_img_0_1(img):
 
 class ImageConverter(object):
     def __init__(self, image_standardize_before_glow, sigmoid_on_alpha,
-                 standardize_for_clf):
-        #self.standardize_alphas_for_glow = standardize_alphas_for_glow
+                 standardize_for_clf, glow_noise_on_out):
         self.image_standardize_before_glow = image_standardize_before_glow
         self.sigmoid_on_alpha = sigmoid_on_alpha
         self.standardize_for_clf = standardize_for_clf
+        self.glow_noise_on_out = glow_noise_on_out
+        if glow_noise_on_out:
+            assert sigmoid_on_alpha
 
 
     def alpha_to_img_orig(self, alphas):
         if self.sigmoid_on_alpha:
             im_orig = torch.sigmoid(alphas)
+            if self.glow_noise_on_out:
+                im_orig = im_orig + torch.rand_like(im_orig) * 1/255.0
         else:
             if self.standardize_for_clf:
                 im_orig = cifar10_standardized_to_img_0_1(alphas)

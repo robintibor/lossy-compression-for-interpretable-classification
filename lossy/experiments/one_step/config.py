@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/cifar10-one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -43,13 +43,31 @@ def get_grid_param_list():
         }
     ]
 
+    # data_params = [
+    #     {
+    #         'dataset': 'mnist',
+    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/20/'
+    #     },
+    #     {
+    #         'dataset': 'fashionmnist',
+    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/21/'
+    #
+    #     },
+    #     {
+    #         'dataset': 'cifar10',
+    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'
+    #     }
+    # ]
+
+
     data_params = dictlistprod({
-        'dataset': ['cifar10'],
+        'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
+        'saved_model_folder': [None],
     })
 
     train_params = dictlistprod(
         {
-            "n_epochs": [50],
+            "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
         }
@@ -59,25 +77,19 @@ def get_grid_param_list():
             "noise_augment_level": 0,
             "noise_after_simplifier": True,
             "noise_before_generator": False,
-        }, {
-            "noise_augment_level": 0,
-            "noise_after_simplifier": False,
-            "noise_before_generator": True,
-        }, {
-            "noise_augment_level": 0,
-            "noise_after_simplifier": False,
-            "noise_before_generator": False,
         },
     ]
 
     random_params = dictlistprod(
         {
-            "np_th_seed": range(0, 1),
+            "np_th_seed": range(3),
         }
     )
 
     model_params = dictlistprod(
         {
+            "depth": [16],
+            "widen_factor": [2],
             "n_start_filters": [64],
             "residual_preproc": [
                 True,
@@ -87,7 +99,7 @@ def get_grid_param_list():
             #114 before
             # 21 for fashionmnist
             #"saved_model_folder": ['/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/20/'],
-            "saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'],
+            #"saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'],
             'save_models': [True],
         }
     )
@@ -149,6 +161,8 @@ def run(
     noise_before_generator,
     noise_after_simplifier,
     noise_augment_level,
+    depth,
+    widen_factor,
 ):
     if debug:
         n_epochs = 3

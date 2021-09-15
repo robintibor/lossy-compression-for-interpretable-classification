@@ -65,6 +65,8 @@ def run_exp(
     noise_before_generator,
     noise_after_simplifier,
     noise_augment_level,
+    depth,
+    widen_factor,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
@@ -113,8 +115,6 @@ def run_exp(
         std=np_to_th(std, device="cpu", dtype=np.float32),
     )
     if model_name == "wide_nf_net":
-        depth = 28
-        widen_factor = 10
         dropout = 0.3
         activation = 'elu' # was relu in past
         if saved_model_folder is not None:
@@ -195,7 +195,7 @@ def run_exp(
         ).cuda()
         preproc[2].factors.data[:] = 0.1
     if noise_after_simplifier:
-        preproc.add_module("noise", Expression(add_glow_noise_to_0_1))
+        preproc = nn.Sequential(preproc, Expression(add_glow_noise_to_0_1))
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []
@@ -248,7 +248,7 @@ def run_exp(
         if dataset in ['cifar10', 'cifar100']:
             aug_m.add_module('hflip', FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape))
         else:
-            assert dataset in ['mnist', 'fashionmnist']
+            assert dataset in ['mnist', 'fashionmnist', 'svhn']
         aug_m.add_module('noise', Expression(lambda x: x + noise))
 
         return aug_m
@@ -462,7 +462,7 @@ def run_exp(
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )
-    if save_models:
-        th.save(preproc.state_dict(), os.path.join(output_dir, 'preproc_state_dict.th'))
-        th.save(clf.state_dict(), os.path.join(output_dir, 'clf_state_dict.th'))
+        if save_models:
+            th.save(preproc.state_dict(), os.path.join(output_dir, 'preproc_state_dict.th'))
+            th.save(clf.state_dict(), os.path.join(output_dir, 'clf_state_dict.th'))
     return results
