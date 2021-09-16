@@ -1,5 +1,17 @@
 import torch
 
+def to_plus_minus_one(x):
+    return (x * 2) - 1
+
+def add_glow_noise(x):
+    # assume after conversion to glow range ([0,255/256.0])
+    return x + torch.rand_like(x) * 1/256.0
+
+
+def add_glow_noise_to_0_1(x):
+    # later will be multiplied with 255/256.0
+    return x + torch.rand_like(x) * 1/255.0
+
 def glow_img_to_img_0_1(image):
     return (image + 0.5) * (256/255.0)
 

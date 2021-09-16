@@ -1,7 +1,98 @@
-from torch import nn
-import torch as th
-import numpy as np
 import kornia
+import torch as th
+from torch import nn
+import math
+import torch
+
+from enum import Enum
+from torch import Tensor
+from typing import List, Tuple, Optional, Dict
+from torchvision.transforms import functional as F
+
+
+def _apply_op(img: Tensor, op_name: str, magnitude: float,):
+    # from torchvision
+    if op_name == "ShearX":
+        img = F.affine(img, angle=0.0, translate=[0, 0], scale=1.0, shear=[math.degrees(magnitude), 0.0],)
+    elif op_name == "ShearY":
+        img = F.affine(img, angle=0.0, translate=[0, 0], scale=1.0, shear=[0.0, math.degrees(magnitude)],)
+    elif op_name == "TranslateX":
+        img = F.affine(img, angle=0.0, translate=[int(magnitude), 0], scale=1.0,
+                        shear=[0.0, 0.0], )
+    elif op_name == "TranslateY":
+        img = F.affine(img, angle=0.0, translate=[0, int(magnitude)], scale=1.0,
+                       shear=[0.0, 0.0], )
+    elif op_name == "Rotate":
+        img = F.rotate(img, magnitude, )
+    elif op_name == "Brightness":
+        img = F.adjust_brightness(img, 1.0 + magnitude)
+    elif op_name == "Color":
+        img = F.adjust_saturation(img, 1.0 + magnitude)
+    elif op_name == "Contrast":
+        img = F.adjust_contrast(img, 1.0 + magnitude)
+    elif op_name == "Sharpness":
+        img = F.adjust_sharpness(img, 1.0 + magnitude)
+    elif op_name == "Posterize":
+        img = F.posterize(img, int(magnitude))
+    elif op_name == "Solarize":
+        img = F.solarize(img, magnitude)
+    elif op_name == "AutoContrast":
+        img = F.autocontrast(img)
+    elif op_name == "Equalize":
+        img = F.equalize(img)
+    elif op_name == "Invert":
+        img = F.invert(img)
+    elif op_name == "Identity":
+        pass
+    else:
+        raise ValueError("The provided operator {} is not recognized.".format(op_name))
+    return img
+
+
+class TrivialAugmentPerImage(nn.Module):
+    def __init__(self, n_examples, num_magnitude_bins):
+        self.op_names = []
+        self.magnitudes = []
+        for i_example in range(n_examples):
+            op_meta = self._augmentation_space(num_magnitude_bins)
+            op_index = int(torch.randint(len(op_meta), (1,)).item())
+            op_name = list(op_meta.keys())[op_index]
+            magnitudes, signed = op_meta[op_name]
+            magnitude = float(magnitudes[torch.randint(len(magnitudes), (1,), dtype=torch.long)].item()) \
+                if magnitudes.ndim > 0 else 0.0
+            if signed and torch.randint(2, (1,)).item():
+                magnitude *= -1.0
+            self.op_names.append(op_name)
+            self.magnitudes.append(magnitude)
+
+    def _augmentation_space(self, num_bins: int) -> Dict[str, Tuple[Tensor, bool]]:
+        return {
+            # op_name: (magnitudes, signed)
+            "Identity": (torch.tensor(0.0), False),
+            "ShearX": (torch.linspace(0.0, 0.99, num_bins), True),
+            "ShearY": (torch.linspace(0.0, 0.99, num_bins), True),
+            "TranslateX": (torch.linspace(0.0, 32.0, num_bins), True),
+            "TranslateY": (torch.linspace(0.0, 32.0, num_bins), True),
+            "Rotate": (torch.linspace(0.0, 135.0, num_bins), True),
+            "Brightness": (torch.linspace(0.0, 0.99, num_bins), True),
+            "Color": (torch.linspace(0.0, 0.99, num_bins), True),
+            "Contrast": (torch.linspace(0.0, 0.99, num_bins), True),
+            # "Sharpness": (torch.linspace(0.0, 0.99, num_bins), True),
+            # "Posterize": (8 - (torch.arange(num_bins) / ((num_bins - 1) / 6)).round().int(), False),
+            # "Solarize": (torch.linspace(256.0, 0.0, num_bins), False),
+            # "AutoContrast": (torch.tensor(0.0), False),
+            # "Equalize": (torch.tensor(0.0), False),
+        }
+
+    def forward(self, x):
+        assert len(x) == len(self.op_names) == len(self.magnitudes)
+        aug_Xs = []
+        for i_image, (op_name, magnitude) in enumerate(zip(self.op_names, self.magnitudes)):
+            aug_X = _apply_op(X[i_image:i_image + 1], op_name, magnitude)
+            aug_Xs.append(aug_X)
+        aug_X = th.cat(aug_Xs)
+        assert len(aug_X) == len(X)
+        return aug_X
 
 
 class FixedAugment(nn.Module):

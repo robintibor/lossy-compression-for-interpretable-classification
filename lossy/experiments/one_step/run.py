@@ -28,17 +28,11 @@ from rtsutils.util import np_to_th, th_to_np
 import wide_resnet.config as cf
 import logging
 import json
+from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 
 log = logging.getLogger(__name__)
 
 
-def add_glow_noise(x):
-    return x + th.rand_like(x) * 1/256.0
-
-
-def add_glow_noise_to_0_1(x):
-    # later will be multiplied with 255/256.0
-    return x + th.rand_like(x) * 1/255.0
 
 
 def run_exp(
