@@ -14,7 +14,7 @@ from torchvision.utils import save_image
 
 import higher
 from lossy.affine import AffineOnChans
-from lossy.augment import FixedAugment
+from lossy.augment import FixedAugment, TrivialAugmentPerImage
 from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import img_0_1_to_glow_img
@@ -61,6 +61,8 @@ def run_exp(
     noise_augment_level,
     depth,
     widen_factor,
+    trivial_augment,
+    resample_augmentation,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
@@ -79,7 +81,6 @@ def run_exp(
     split_test_off_train = False
     n_warmup_epochs = 0
     bias_for_conv = True
-    resample_augmentation = True
 
     log.info("Load data...")
     data_path = "/home/schirrmr/data/pytorch-datasets/"
@@ -228,16 +229,20 @@ def run_exp(
     )
 
 
-    def get_aug_m(X_shape):
+    def get_aug_m(X_shape, trivial_augment):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
         aug_m = nn.Sequential()
-        aug_m.add_module('crop', FixedAugment(
-                    kornia.augmentation.RandomCrop(
-                        (32, 32),
-                        padding=4,
-                    ),
-                    X_shape,
-                ),)
+        if trivial_augment:
+            aug_m.add_module(TrivialAugmentPerImage(
+                X_shape[0], num_magnitude_bins=31))
+        else:
+            aug_m.add_module('crop', FixedAugment(
+                        kornia.augmentation.RandomCrop(
+                            (32, 32),
+                            padding=4,
+                        ),
+                        X_shape,
+                    ),)
 
         if dataset in ['cifar10', 'cifar100']:
             aug_m.add_module('hflip', FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape))
@@ -255,7 +260,8 @@ def run_exp(
                 module.scalar.data[:] = 1
         with th.no_grad():
             init_X = th.cat(
-                [get_aug_m(X.shape)(X.cuda()) for X, y in islice(trainloader, 10)]
+                [get_aug_m(X.shape, trivial_augment=trivial_augment)(X.cuda())
+                 for X, y in islice(trainloader, 10)]
             )
 
         def adjust_beta(module, input):
@@ -308,7 +314,7 @@ def run_exp(
             clf.train()
             X = X.cuda()
             y = y.cuda()
-            aug_m = get_aug_m(X.shape)
+            aug_m = get_aug_m(X.shape, trivial_augment=trivial_augment)
 
             simple_X = preproc(X)
             simple_X_aug = aug_m(simple_X)
@@ -325,7 +331,7 @@ def run_exp(
 
             # could resampe aug_m here if wanted
             if resample_augmentation:
-                aug_m = get_aug_m(X.shape)
+                aug_m = get_aug_m(X.shape, trivial_augment=trivial_augment)
             torch.set_rng_state(random_state)
             f_simple_out = f_clf(simple_X_aug)
             f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)

@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-trivial-augment/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -61,12 +61,14 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
+        #'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
+        'dataset': ['cifar10', 'mnist'],
         'saved_model_folder': [None],
     })
 
     train_params = dictlistprod(
         {
+            #"n_epochs": [20],
             "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
@@ -77,12 +79,14 @@ def get_grid_param_list():
             "noise_augment_level": 0,
             "noise_after_simplifier": True,
             "noise_before_generator": False,
+            'trivial_augment': True,
         },
     ]
 
     random_params = dictlistprod(
         {
-            "np_th_seed": range(3),
+            #"np_th_seed": range(3),
+            "np_th_seed": [0],
         }
     )
 
@@ -105,6 +109,7 @@ def get_grid_param_list():
     )
     optim_params = dictlistprod(
         {
+            "resample_augmentation": [True, False],
             "weight_decay": [1e-5],
             "lr_clf": [5e-4],#5e-4,
             "lr_preproc": [5e-4],
@@ -114,7 +119,8 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
+            #"bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
+            "bpd_weight": [0.4, 1.6,]
         }
     )
 
@@ -163,6 +169,8 @@ def run(
     noise_augment_level,
     depth,
     widen_factor,
+    trivial_augment,
+    resample_augmentation,
 ):
     if debug:
         n_epochs = 3
