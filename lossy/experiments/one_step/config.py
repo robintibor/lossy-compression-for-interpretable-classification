@@ -61,8 +61,8 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        #'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
-        'dataset': ['cifar10', 'mnist'],
+        'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
+        #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
     })
 
@@ -85,8 +85,8 @@ def get_grid_param_list():
 
     random_params = dictlistprod(
         {
-            #"np_th_seed": range(3),
-            "np_th_seed": [0],
+            "np_th_seed": range(3),
+            #"np_th_seed": [0],
         }
     )
 
@@ -109,7 +109,9 @@ def get_grid_param_list():
     )
     optim_params = dictlistprod(
         {
-            "resample_augmentation": [True, False],
+            "resample_augmentation": [False],# default this was True
+            "resample_augmentation_for_clf": [False], # default this was False
+            "std_aug_magnitude": [0.25, None],
             "weight_decay": [1e-5],
             "lr_clf": [5e-4],#5e-4,
             "lr_preproc": [5e-4],
@@ -119,8 +121,8 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            #"bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
-            "bpd_weight": [0.4, 1.6,]
+            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
+            #"bpd_weight": [0.4, 1.6,]
         }
     )
 
@@ -171,6 +173,8 @@ def run(
     widen_factor,
     trivial_augment,
     resample_augmentation,
+    resample_augmentation_for_clf,
+    std_aug_magnitude,
 ):
     if debug:
         n_epochs = 3

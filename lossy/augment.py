@@ -3,27 +3,56 @@ import torch as th
 from torch import nn
 import math
 import torch
-
+from torch.distributions.half_normal import HalfNormal
 from enum import Enum
 from torch import Tensor
 from typing import List, Tuple, Optional, Dict
 from torchvision.transforms import functional as F
 
 
-def _apply_op(img: Tensor, op_name: str, magnitude: float,):
+def _apply_op(
+    img: Tensor,
+    op_name: str,
+    magnitude: float,
+):
     # from torchvision
     if op_name == "ShearX":
-        img = F.affine(img, angle=0.0, translate=[0, 0], scale=1.0, shear=[math.degrees(magnitude), 0.0],)
+        img = F.affine(
+            img,
+            angle=0.0,
+            translate=[0, 0],
+            scale=1.0,
+            shear=[math.degrees(magnitude), 0.0],
+        )
     elif op_name == "ShearY":
-        img = F.affine(img, angle=0.0, translate=[0, 0], scale=1.0, shear=[0.0, math.degrees(magnitude)],)
+        img = F.affine(
+            img,
+            angle=0.0,
+            translate=[0, 0],
+            scale=1.0,
+            shear=[0.0, math.degrees(magnitude)],
+        )
     elif op_name == "TranslateX":
-        img = F.affine(img, angle=0.0, translate=[int(magnitude), 0], scale=1.0,
-                        shear=[0.0, 0.0], )
+        img = F.affine(
+            img,
+            angle=0.0,
+            translate=[int(magnitude), 0],
+            scale=1.0,
+            shear=[0.0, 0.0],
+        )
     elif op_name == "TranslateY":
-        img = F.affine(img, angle=0.0, translate=[0, int(magnitude)], scale=1.0,
-                       shear=[0.0, 0.0], )
+        img = F.affine(
+            img,
+            angle=0.0,
+            translate=[0, int(magnitude)],
+            scale=1.0,
+            shear=[0.0, 0.0],
+        )
     elif op_name == "Rotate":
-        img = F.rotate(img, magnitude, )
+        img = F.rotate(
+            img,
+            magnitude,
+        )
     elif op_name == "Brightness":
         img = F.adjust_brightness(img, 1.0 + magnitude)
     elif op_name == "Color":
@@ -50,7 +79,20 @@ def _apply_op(img: Tensor, op_name: str, magnitude: float,):
 
 
 class TrivialAugmentPerImage(nn.Module):
-    def __init__(self, n_examples, num_magnitude_bins):
+    def __init__(self, n_examples, num_magnitude_bins, std_aug_magnitude):
+        super().__init__()
+
+        # This whole logic assumes the identity
+        # is the smallest magnitude of augmentation
+        if std_aug_magnitude is not None:
+            dist = HalfNormal(num_magnitude_bins * std_aug_magnitude)
+            cdfs = dist.cdf(th.linspace(1, num_magnitude_bins, num_magnitude_bins))
+            # do not have to sum to zero as multinomial will normalize
+            probs = th.cat((cdfs[0:1], th.diff(cdfs)))
+        else:
+            # Uniform sampling
+            probs = torch.tensor([1 / num_magnitude_bins]).repeat(num_magnitude_bins)
+
         self.op_names = []
         self.magnitudes = []
         for i_example in range(n_examples):
@@ -58,8 +100,12 @@ class TrivialAugmentPerImage(nn.Module):
             op_index = int(torch.randint(len(op_meta), (1,)).item())
             op_name = list(op_meta.keys())[op_index]
             magnitudes, signed = op_meta[op_name]
-            magnitude = float(magnitudes[torch.randint(len(magnitudes), (1,), dtype=torch.long)].item()) \
-                if magnitudes.ndim > 0 else 0.0
+            i_magnitude_bin = torch.multinomial(probs, 1).item()
+            magnitude = (
+                float(magnitudes[i_magnitude_bin].item())
+                if magnitudes.ndim > 0
+                else 0.0
+            )
             if signed and torch.randint(2, (1,)).item():
                 magnitude *= -1.0
             self.op_names.append(op_name)
@@ -77,18 +123,22 @@ class TrivialAugmentPerImage(nn.Module):
             "Brightness": (torch.linspace(0.0, 0.99, num_bins), True),
             "Color": (torch.linspace(0.0, 0.99, num_bins), True),
             "Contrast": (torch.linspace(0.0, 0.99, num_bins), True),
-            # "Sharpness": (torch.linspace(0.0, 0.99, num_bins), True),
+            "Sharpness": (torch.linspace(0.0, 0.99, num_bins), True),
+            # also seems not work for float images
             # "Posterize": (8 - (torch.arange(num_bins) / ((num_bins - 1) / 6)).round().int(), False),
-            # "Solarize": (torch.linspace(256.0, 0.0, num_bins), False),
+            "Solarize": (torch.linspace(256.0, 0.0, num_bins), False),
+            # grad problems
             # "AutoContrast": (torch.tensor(0.0), False),
-            # "Equalize": (torch.tensor(0.0), False),
+            # "Equalize": (torch.tensor(0.0), False), not working for float images
         }
 
-    def forward(self, x):
-        assert len(x) == len(self.op_names) == len(self.magnitudes)
+    def forward(self, X):
+        assert len(X) == len(self.op_names) == len(self.magnitudes)
         aug_Xs = []
-        for i_image, (op_name, magnitude) in enumerate(zip(self.op_names, self.magnitudes)):
-            aug_X = _apply_op(X[i_image:i_image + 1], op_name, magnitude)
+        for i_image, (op_name, magnitude) in enumerate(
+            zip(self.op_names, self.magnitudes)
+        ):
+            aug_X = _apply_op(X[i_image : i_image + 1], op_name, magnitude)
             aug_Xs.append(aug_X)
         aug_X = th.cat(aug_Xs)
         assert len(aug_X) == len(X)
@@ -100,8 +150,8 @@ class FixedAugment(nn.Module):
         super().__init__()
         self.kornia_obj = kornia_obj
         # fix bug with forward parameters for padding
-        if hasattr(kornia_obj, 'padding'):
-            assert kornia_obj.__class__.__name__ == 'RandomCrop'
+        if hasattr(kornia_obj, "padding"):
+            assert kornia_obj.__class__.__name__ == "RandomCrop"
             padding = kornia_obj.padding
             X_shape = X_shape[:2] + (X_shape[2] + padding, X_shape[3] + padding)
         self.forward_parameters = self.kornia_obj.forward_parameters(X_shape)
@@ -109,9 +159,16 @@ class FixedAugment(nn.Module):
     def forward(self, X):
         return self.kornia_obj(X, self.forward_parameters)
 
+
 class Augmenter(nn.Module):
-    def __init__(self, contrast_factor, mix_grayscale_dists, demean,
-                 expect_glow_range, std_noise_factor):
+    def __init__(
+        self,
+        contrast_factor,
+        mix_grayscale_dists,
+        demean,
+        expect_glow_range,
+        std_noise_factor,
+    ):
         super().__init__()
         self.contrast_factor = contrast_factor
         self.mix_grayscale_dists = mix_grayscale_dists
@@ -127,14 +184,18 @@ class Augmenter(nn.Module):
             x_other = th.flatten(x[th.randperm(len(x))], 1)
             x_val_sorted = x_other.sort(dim=1)[0]
             x_i_sorted = x_flat.sort(dim=1)[1].sort(dim=1)[1]
-            changed_x = th.gather(x_val_sorted, 1, x_i_sorted, )
+            changed_x = th.gather(
+                x_val_sorted,
+                1,
+                x_i_sorted,
+            )
             changed_x = x_flat + (changed_x - x_flat).detach()
             reshaped_x = changed_x.reshape(x.shape)
             x = reshaped_x
         if self.demean:
             x = x - x.mean(dim=(1, 2, 3), keepdim=True) + 0.5
             # now clamp to [0,1]
-            x = x + (x.clamp(1e-3,1-1e-3) - x).detach()
+            x = x + (x.clamp(1e-3, 1 - 1e-3) - x).detach()
         contrast_factor = self.contrast_factor
         if callable(contrast_factor):
             contrast_factor = contrast_factor()
@@ -144,7 +205,7 @@ class Augmenter(nn.Module):
         if self.std_noise_factor is not None:
             x = x + th.randn_like(x) * self.std_noise_factor
             # now clamp to [0,1]
-            x = x + (x.clamp(1e-3,1-1e-3) - x).detach()
+            x = x + (x.clamp(1e-3, 1 - 1e-3) - x).detach()
 
         if self.expect_glow_range:
             x = x - 0.5

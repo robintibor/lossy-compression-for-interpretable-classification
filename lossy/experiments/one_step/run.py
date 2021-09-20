@@ -33,8 +33,6 @@ from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 log = logging.getLogger(__name__)
 
 
-
-
 def run_exp(
     output_dir,
     n_epochs,
@@ -63,10 +61,12 @@ def run_exp(
     widen_factor,
     trivial_augment,
     resample_augmentation,
+    resample_augmentation_for_clf,
+    std_aug_magnitude,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
-        assert model_name == 'wide_nf_net'
+        assert model_name == "wide_nf_net"
     writer = SummaryWriter(output_dir)
 
     hparams = {k: v for k, v in locals().items() if v is not None}
@@ -101,7 +101,6 @@ def run_exp(
         first_n=first_n,
     )
 
-
     log.info("Create classifier...")
     mean = cf.mean[dataset]
     std = cf.mean[dataset]
@@ -111,21 +110,28 @@ def run_exp(
     )
     if model_name == "wide_nf_net":
         dropout = 0.3
-        activation = 'elu' # was relu in past
+        activation = "elu"  # was relu in past
         if saved_model_folder is not None:
-            saved_model_config = json.load(open(os.path.join(saved_model_folder, 'config.json'), 'r'))
-            depth = saved_model_config['depth']
-            widen_factor = saved_model_config['widen_factor']
-            dropout = saved_model_config['dropout']
-            activation = saved_model_config.get('activation', 'relu') # default was relu
-            assert saved_model_config.get('dataset', 'cifar10') == dataset
+            saved_model_config = json.load(
+                open(os.path.join(saved_model_folder, "config.json"), "r")
+            )
+            depth = saved_model_config["depth"]
+            widen_factor = saved_model_config["widen_factor"]
+            dropout = saved_model_config["dropout"]
+            activation = saved_model_config.get(
+                "activation", "relu"
+            )  # default was relu
+            assert saved_model_config.get("dataset", "cifar10") == dataset
         from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
-        nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
-                               activation=activation).cuda()
+        nf_net = Wide_NFResNet(
+            depth, widen_factor, dropout, num_classes, activation=activation
+        ).cuda()
         nf_net.apply(conv_init)
         if saved_model_folder is not None:
-            saved_clf_state_dict = th.load(os.path.join(saved_model_folder, 'nf_net_state_dict.th'))
+            saved_clf_state_dict = th.load(
+                os.path.join(saved_model_folder, "nf_net_state_dict.th")
+            )
             nf_net.load_state_dict(saved_clf_state_dict)
     else:
         assert model_name == "nf_net"
@@ -186,7 +192,7 @@ def run_exp(
                 nonlin_down=nn.ELU,
                 nonlin_up=nn.ELU,
             ),
-            AffineOnChans(3), # Does this even make sense after sigmoid?
+            AffineOnChans(3),  # Does this even make sense after sigmoid?
         ).cuda()
         preproc[2].factors.data[:] = 0.1
     if noise_after_simplifier:
@@ -228,27 +234,38 @@ def run_exp(
         preproc.parameters(), lr=lr_preproc, weight_decay=5e-5, betas=beta_preproc
     )
 
-
-    def get_aug_m(X_shape, trivial_augment):
+    def get_aug_m(X_shape, trivial_augment, std_aug_magnitude):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
         aug_m = nn.Sequential()
         if trivial_augment:
-            aug_m.add_module(TrivialAugmentPerImage(
-                X_shape[0], num_magnitude_bins=31))
+            aug_m.add_module(
+                "trivial_augment",
+                TrivialAugmentPerImage(
+                    X_shape[0],
+                    num_magnitude_bins=31,
+                    std_aug_magnitude=std_aug_magnitude,
+                ),
+            )
         else:
-            aug_m.add_module('crop', FixedAugment(
-                        kornia.augmentation.RandomCrop(
-                            (32, 32),
-                            padding=4,
-                        ),
-                        X_shape,
-                    ),)
+            aug_m.add_module(
+                "crop",
+                FixedAugment(
+                    kornia.augmentation.RandomCrop(
+                        (32, 32),
+                        padding=4,
+                    ),
+                    X_shape,
+                ),
+            )
 
-        if dataset in ['cifar10', 'cifar100']:
-            aug_m.add_module('hflip', FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape))
+        if dataset in ["cifar10", "cifar100"]:
+            aug_m.add_module(
+                "hflip",
+                FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
+            )
         else:
-            assert dataset in ['mnist', 'fashionmnist', 'svhn']
-        aug_m.add_module('noise', Expression(lambda x: x + noise))
+            assert dataset in ["mnist", "fashionmnist", "svhn"]
+        aug_m.add_module("noise", Expression(lambda x: x + noise))
 
         return aug_m
 
@@ -260,8 +277,14 @@ def run_exp(
                 module.scalar.data[:] = 1
         with th.no_grad():
             init_X = th.cat(
-                [get_aug_m(X.shape, trivial_augment=trivial_augment)(X.cuda())
-                 for X, y in islice(trainloader, 10)]
+                [
+                    get_aug_m(
+                        X.shape,
+                        trivial_augment=trivial_augment,
+                        std_aug_magnitude=std_aug_magnitude,
+                    )(X.cuda())
+                    for X, y in islice(trainloader, 10)
+                ]
             )
 
         def adjust_beta(module, input):
@@ -314,7 +337,11 @@ def run_exp(
             clf.train()
             X = X.cuda()
             y = y.cuda()
-            aug_m = get_aug_m(X.shape, trivial_augment=trivial_augment)
+            aug_m = get_aug_m(
+                X.shape,
+                trivial_augment=trivial_augment,
+                std_aug_magnitude=std_aug_magnitude,
+            )
 
             simple_X = preproc(X)
             simple_X_aug = aug_m(simple_X)
@@ -329,23 +356,39 @@ def run_exp(
                 f_simple_loss_before = th.nn.functional.cross_entropy(f_simple_out, y)
                 f_opt_clf.step(f_simple_loss_before)
 
-            # could resampe aug_m here if wanted
-            if resample_augmentation:
-                aug_m = get_aug_m(X.shape, trivial_augment=trivial_augment)
             torch.set_rng_state(random_state)
             f_simple_out = f_clf(simple_X_aug)
             f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
+            # could resample aug_m here if wanted
+            if resample_augmentation:
+                aug_m = get_aug_m(
+                    X.shape,
+                    trivial_augment=trivial_augment,
+                    std_aug_magnitude=std_aug_magnitude,
+                )
             torch.set_rng_state(random_state)
             f_orig_out = f_clf(X_aug)
-            f_orig_loss_per_ex = th.nn.functional.cross_entropy(f_orig_out, y, reduction='none')
+            f_orig_loss_per_ex = th.nn.functional.cross_entropy(
+                f_orig_out, y, reduction="none"
+            )
 
             bpd = get_bpd(gen, simple_X)
-            bpd_factors = ((1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)).detach()
+            bpd_factors = (
+                (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
+            ).detach()
             bpd_loss = th.mean(bpd * bpd_factors)
             f_orig_loss = th.mean(f_orig_loss_per_ex)
             im_loss = weighted_sum(
-                1, 1, f_simple_loss_before, 1, f_simple_loss, 10, f_orig_loss, bpd_weight, bpd_loss
+                1,
+                1,
+                f_simple_loss_before,
+                1,
+                f_simple_loss,
+                10,
+                f_orig_loss,
+                bpd_weight,
+                bpd_loss,
             )
 
             opt_preproc.zero_grad(set_to_none=True)
@@ -354,6 +397,13 @@ def run_exp(
                 opt_preproc.step()
             opt_preproc.zero_grad(set_to_none=True)
 
+            # Classifier training
+            if resample_augmentation_for_clf:
+                aug_m = get_aug_m(
+                    X.shape,
+                    trivial_augment=trivial_augment,
+                    std_aug_magnitude=std_aug_magnitude,
+                )
             with th.no_grad():
                 simple_X = preproc(X)
                 simple_X_aug = aug_m(simple_X)
@@ -392,6 +442,7 @@ def run_exp(
         clf.eval()
         nb_res.plot_df()
         with nb_res.output_area("accs_losses"):
+            log.info(f"Epoch {i_epoch:d}")
             results = {}
             with torch.no_grad():
                 for with_preproc in [True, False]:
@@ -463,6 +514,8 @@ def run_exp(
                 nrow=int(np.sqrt(len(X_preproced))),
             )
         if save_models:
-            th.save(preproc.state_dict(), os.path.join(output_dir, 'preproc_state_dict.th'))
-            th.save(clf.state_dict(), os.path.join(output_dir, 'clf_state_dict.th'))
+            th.save(
+                preproc.state_dict(), os.path.join(output_dir, "preproc_state_dict.th")
+            )
+            th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
     return results
