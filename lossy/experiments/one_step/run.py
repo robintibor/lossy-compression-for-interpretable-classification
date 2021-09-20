@@ -63,6 +63,7 @@ def run_exp(
     resample_augmentation,
     resample_augmentation_for_clf,
     std_aug_magnitude,
+    extra_augs,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
@@ -234,7 +235,7 @@ def run_exp(
         preproc.parameters(), lr=lr_preproc, weight_decay=5e-5, betas=beta_preproc
     )
 
-    def get_aug_m(X_shape, trivial_augment, std_aug_magnitude):
+    def get_aug_m(X_shape, trivial_augment, std_aug_magnitude, extra_augs):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
         aug_m = nn.Sequential()
         if trivial_augment:
@@ -244,6 +245,7 @@ def run_exp(
                     X_shape[0],
                     num_magnitude_bins=31,
                     std_aug_magnitude=std_aug_magnitude,
+                    extra_augs=extra_augs,
                 ),
             )
         else:
@@ -282,6 +284,7 @@ def run_exp(
                         X.shape,
                         trivial_augment=trivial_augment,
                         std_aug_magnitude=std_aug_magnitude,
+                        extra_augs=extra_augs,
                     )(X.cuda())
                     for X, y in islice(trainloader, 10)
                 ]
@@ -341,6 +344,7 @@ def run_exp(
                 X.shape,
                 trivial_augment=trivial_augment,
                 std_aug_magnitude=std_aug_magnitude,
+                extra_augs=extra_augs,
             )
 
             simple_X = preproc(X)
@@ -360,13 +364,6 @@ def run_exp(
             f_simple_out = f_clf(simple_X_aug)
             f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
-            # could resample aug_m here if wanted
-            if resample_augmentation:
-                aug_m = get_aug_m(
-                    X.shape,
-                    trivial_augment=trivial_augment,
-                    std_aug_magnitude=std_aug_magnitude,
-                )
             torch.set_rng_state(random_state)
             f_orig_out = f_clf(X_aug)
             f_orig_loss_per_ex = th.nn.functional.cross_entropy(
@@ -403,6 +400,7 @@ def run_exp(
                     X.shape,
                     trivial_augment=trivial_augment,
                     std_aug_magnitude=std_aug_magnitude,
+                    extra_augs=extra_augs,
                 )
             with th.no_grad():
                 simple_X = preproc(X)
@@ -418,7 +416,6 @@ def run_exp(
 
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
-            # Maybe keep grads for analysis?
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
             with th.no_grad():

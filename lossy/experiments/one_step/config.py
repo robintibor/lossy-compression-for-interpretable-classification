@@ -61,8 +61,8 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
-        #'dataset': ['cifar10'],#, 'mnist'],
+        #'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
+        'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
     })
 
@@ -80,6 +80,7 @@ def get_grid_param_list():
             "noise_after_simplifier": True,
             "noise_before_generator": False,
             'trivial_augment': True,
+            'extra_augs': True,
         },
     ]
 
@@ -111,7 +112,7 @@ def get_grid_param_list():
         {
             "resample_augmentation": [False],# default this was True
             "resample_augmentation_for_clf": [False], # default this was False
-            "std_aug_magnitude": [0.25, None],
+            "std_aug_magnitude": [None],#0.25
             "weight_decay": [1e-5],
             "lr_clf": [5e-4],#5e-4,
             "lr_preproc": [5e-4],
@@ -175,6 +176,7 @@ def run(
     resample_augmentation,
     resample_augmentation_for_clf,
     std_aug_magnitude,
+    extra_augs,
 ):
     if debug:
         n_epochs = 3

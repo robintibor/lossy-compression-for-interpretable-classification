@@ -9,6 +9,30 @@ from torch import Tensor
 from typing import List, Tuple, Optional, Dict
 from torchvision.transforms import functional as F
 
+def posterize_with_grad(img, bits):
+    uint_img = (img.detach() * 255).type(th.uint8)
+    posterized = F.posterize(uint_img, bits)
+    img_aug = (posterized / 255) + img - img.detach()
+    return img_aug
+
+def autocontrast_with_grad(img):
+    bound = 1.0 if img.is_floating_point() else 255.0
+    dtype = img.dtype if torch.is_floating_point(img) else torch.float32
+
+    minimum = img.amin(dim=(-2, -1), keepdim=True).to(dtype)
+    maximum = img.amax(dim=(-2, -1), keepdim=True).to(dtype)
+    eq_mask = minimum == maximum
+    minimum = minimum - (eq_mask * minimum)
+    maximum = maximum + eq_mask * (bound - maximum)
+    scale = bound / (maximum - minimum)
+    out = ((img - minimum) * scale)
+    return out
+
+def equalize_with_grad(img,):
+    uint_img = (img.detach() * 255).type(th.uint8)
+    equalized = F.equalize(uint_img,)
+    img_aug = (equalized / 255) + img - img.detach()
+    return img_aug
 
 def _apply_op(
     img: Tensor,
@@ -62,13 +86,14 @@ def _apply_op(
     elif op_name == "Sharpness":
         img = F.adjust_sharpness(img, 1.0 + magnitude)
     elif op_name == "Posterize":
-        img = F.posterize(img, int(magnitude))
+        # impadd
+        img = posterize_with_grad(img, int(magnitude))
     elif op_name == "Solarize":
         img = F.solarize(img, magnitude)
     elif op_name == "AutoContrast":
-        img = F.autocontrast(img)
+        img = autocontrast_with_grad(img)
     elif op_name == "Equalize":
-        img = F.equalize(img)
+        img = equalize_with_grad(img)
     elif op_name == "Invert":
         img = F.invert(img)
     elif op_name == "Identity":
@@ -79,7 +104,7 @@ def _apply_op(
 
 
 class TrivialAugmentPerImage(nn.Module):
-    def __init__(self, n_examples, num_magnitude_bins, std_aug_magnitude):
+    def __init__(self, n_examples, num_magnitude_bins, std_aug_magnitude, extra_augs):
         super().__init__()
 
         # This whole logic assumes the identity
@@ -96,7 +121,8 @@ class TrivialAugmentPerImage(nn.Module):
         self.op_names = []
         self.magnitudes = []
         for i_example in range(n_examples):
-            op_meta = self._augmentation_space(num_magnitude_bins)
+            op_meta = self._augmentation_space(
+                num_magnitude_bins, extra_augs=extra_augs)
             op_index = int(torch.randint(len(op_meta), (1,)).item())
             op_name = list(op_meta.keys())[op_index]
             magnitudes, signed = op_meta[op_name]
@@ -111,9 +137,8 @@ class TrivialAugmentPerImage(nn.Module):
             self.op_names.append(op_name)
             self.magnitudes.append(magnitude)
 
-    def _augmentation_space(self, num_bins: int) -> Dict[str, Tuple[Tensor, bool]]:
-        return {
-            # op_name: (magnitudes, signed)
+    def _augmentation_space(self, num_bins: int, extra_augs: bool) -> Dict[str, Tuple[Tensor, bool]]:
+        space = {
             "Identity": (torch.tensor(0.0), False),
             "ShearX": (torch.linspace(0.0, 0.99, num_bins), True),
             "ShearY": (torch.linspace(0.0, 0.99, num_bins), True),
@@ -124,13 +149,17 @@ class TrivialAugmentPerImage(nn.Module):
             "Color": (torch.linspace(0.0, 0.99, num_bins), True),
             "Contrast": (torch.linspace(0.0, 0.99, num_bins), True),
             "Sharpness": (torch.linspace(0.0, 0.99, num_bins), True),
-            # also seems not work for float images
-            # "Posterize": (8 - (torch.arange(num_bins) / ((num_bins - 1) / 6)).round().int(), False),
             "Solarize": (torch.linspace(256.0, 0.0, num_bins), False),
-            # grad problems
-            # "AutoContrast": (torch.tensor(0.0), False),
-            # "Equalize": (torch.tensor(0.0), False), not working for float images
         }
+        if extra_augs:
+            extra_space = {
+                        "Posterize": (8 - (torch.arange(num_bins) / ((num_bins - 1) / 6)).round().int(), False,),
+                        "AutoContrast": (torch.tensor(0.0), False,),
+                        "Equalize": (torch.tensor(0.0), False,),
+                }
+            space = {**space, **extra_space}
+        return space
+
 
     def forward(self, X):
         assert len(X) == len(self.op_names) == len(self.magnitudes)
