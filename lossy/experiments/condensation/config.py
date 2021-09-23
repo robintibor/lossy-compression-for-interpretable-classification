@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/with-noise/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-25000-train-data/",
         },
     ]
 
@@ -43,20 +43,26 @@ def get_grid_param_list():
     ]
 
     data_params = dictlistprod({
-        'dataset': ['CIFAR10', 'MNIST', 'SVHN', 'FashionMNIST'],
+        'dataset': ['MIMIC-CXR'],#, 'MNIST', 'SVHN', 'FashionMNIST'
+        'mimic_cxr_clip': [0.6,1.0],
     })
 
     ipc_params = [
-        # {
-        #     "ipc": 1,
-        #     "outer_loop": 1,
-        #     "inner_loop": 1,
-        # },
         {
-            "ipc": 10,
-            "outer_loop": 10,
-            "inner_loop": 50,
-        }
+            "ipc": 1,
+            "outer_loop": 1,
+            "inner_loop": 1,
+        },
+        {
+            "ipc": 1,
+            "outer_loop": 5,
+            "inner_loop": 5,
+        },
+        # {
+        #     "ipc": 10,
+        #     "outer_loop": 10,
+        #     "inner_loop": 50,
+        # }
     ]
 
     train_params = dictlistprod(
@@ -85,12 +91,14 @@ def get_grid_param_list():
             "loss_name": ["match_loss"],#"grad_grad",
             "rescale_grads": [False,],
             "saved_model_path": [None],#"chenyaofo/pytorch-cifar-models#cifar100_resnet20"
+            "trivial_augment": [False],
+            "same_aug_across_batch": [False],
         }
     )
 
     random_params = dictlistprod(
         {
-            "seed": [0,1,2],  # range(0, 3),
+            "seed": [0],#,1,2],  # range(0, 3),
         }
     )
 
@@ -135,6 +143,9 @@ def run(
     rescale_grads,
     dataset,
     glow_noise_on_out,
+    trivial_augment,
+    same_aug_across_batch,
+    mimic_cxr_clip,
 ):
     data_path = '/home/schirrmr/data/pytorch-datasets/'
     model_name = "ConvNet"

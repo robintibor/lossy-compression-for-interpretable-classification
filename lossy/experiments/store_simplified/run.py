@@ -33,14 +33,11 @@ def run_exp(
     exp_id,
 ):
     first_n = None
-    exp_folder = os.path.join(parent_exp_folder, str(exp_id))
     import json
     from lossy.datasets import get_dataset
     exp_folder = os.path.join(parent_exp_folder, str(exp_id))
 
     config = json.load(open(os.path.join(exp_folder, 'config.json'), 'r'))
-    noise_augment_level = config['noise_augment_level']
-    saved_model_folder = config['saved_model_folder']
     dataset = config['dataset']
 
     assert config['noise_after_simplifier']

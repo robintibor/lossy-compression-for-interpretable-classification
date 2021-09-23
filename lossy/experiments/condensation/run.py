@@ -9,6 +9,7 @@ from torch import nn
 from torchvision.utils import save_image
 
 from invglow.invertible.expression import Expression
+from lossy.augment import TrivialAugmentPerImage
 from lossy.image_convert import (
     ImageConverter,
     glow_img_to_img_0_1,
@@ -43,6 +44,7 @@ def save_image_from_alpha(
     # because of the initialization and normalization of pixels.
 
 
+
 def evaluate_models(
     image_syn_alpha,
     label_syn,
@@ -62,6 +64,8 @@ def evaluate_models(
     image_converter,
     epoch_eval_train,
     saved_model,
+    trivial_augment,
+    same_aug_across_batch,
 ):
     accs_per_model = {}
     for key in model_eval_pool:
@@ -90,6 +94,7 @@ def evaluate_models(
             # Override net with saved model if given
             if saved_model is not None:
                 net_eval = copy_with_replaced_head(saved_model, num_classes)
+            # will unnecessary add noise I guess?
             image_syn_eval = copy.deepcopy(
                 image_converter.alpha_to_img_orig(image_syn_alpha).detach()
             )
@@ -108,6 +113,8 @@ def evaluate_models(
                 image_syn_alpha.device,
                 epoch_eval_train,
                 image_converter=image_converter,
+                trivial_augment=trivial_augment,
+                same_aug_across_batch=same_aug_across_batch,
             )
             accs.append(acc_test)
         print(
@@ -159,6 +166,9 @@ def run_exp(
     saved_model_path,
     rescale_grads,
     glow_noise_on_out,
+    trivial_augment,
+    same_aug_across_batch,
+    mimic_cxr_clip,
 ):
     # outer_loop, inner_loop = get_loops(ipc)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -186,7 +196,7 @@ def run_exp(
         dst_train,
         dst_test,
         testloader,
-    ) = get_dataset(dataset, data_path, standardize=False)
+    ) = get_dataset(dataset, data_path, standardize=False, mimic_cxr_clip=mimic_cxr_clip)
     # strings with model names for evaluation models
     model_eval_pool = get_eval_pool(eval_mode, model_name, model_name)
 
@@ -210,15 +220,22 @@ def run_exp(
     )
 
     """ organize the real dataset """
-    indices_class = [[] for c in range(num_classes)]
 
-    images_all = [
-        torch.unsqueeze(dst_train[i][0], dim=0) for i in range(len(dst_train))
-    ]
-    labels_all = [dst_train[i][1] for i in range(len(dst_train))]
+    train_det_loader = torch.utils.data.DataLoader(
+        dst_train,
+        batch_size=256,
+        shuffle=False,
+        num_workers=2,
+        drop_last=False,
+    )
+    Xs_ys = [(X, y) for X, y in train_det_loader]
+
+    images_all = torch.cat([X for X, y in Xs_ys]).to(device)
+    labels_all = torch.cat([y for X, y in Xs_ys])
+
+    indices_class = [[] for c in range(num_classes)]
     for i, y in enumerate(labels_all):
         indices_class[y].append(i)
-    images_all = torch.cat(images_all, dim=0).to(device)
 
     for c in range(num_classes):
         print("class c = %d: %d real images" % (c, len(indices_class[c])))
@@ -310,6 +327,8 @@ def run_exp(
                 image_converter,
                 epoch_eval_train,
                 saved_model,
+                trivial_augment=trivial_augment,
+                same_aug_across_batch=False, # works better with false than passing argument
             )
             image_filename = os.path.join(
                 save_path,
@@ -372,7 +391,15 @@ def run_exp(
             all_gw_reals = []
             for c in range(num_classes):
                 img_real = get_images(c, batch_real)
-
+                if trivial_augment and same_aug_across_batch:
+                    aug_m = TrivialAugmentPerImage(
+                        1,
+                        num_magnitude_bins=31,
+                        std_aug_magnitude=None,
+                        extra_augs=True,
+                        same_across_batch=same_aug_across_batch,
+                    )
+                    img_real = aug_m(img_real)
                 img_real = image_converter.img_orig_to_clf(img_real)
                 lab_real = (
                     torch.ones((img_real.shape[0],), device=device, dtype=torch.long)
@@ -381,7 +408,19 @@ def run_exp(
                 this_img_syn_alpha = image_syn_alpha[c * ipc : (c + 1) * ipc].reshape(
                     (ipc, channel, im_size[0], im_size[1])
                 )
-                img_syn = image_converter.alpha_to_clf(this_img_syn_alpha)
+
+                img_syn_orig = image_converter.alpha_to_img_orig(this_img_syn_alpha)
+                if trivial_augment and (not same_aug_across_batch):
+                    aug_m = TrivialAugmentPerImage(
+                        img_syn_orig.shape[0],
+                        num_magnitude_bins=31,
+                        std_aug_magnitude=None,
+                        extra_augs=True,
+                        same_across_batch=same_aug_across_batch,
+                    )
+                if trivial_augment:
+                    img_syn_orig = aug_m(img_syn_orig)
+                img_syn = image_converter.img_orig_to_clf(img_syn_orig)
                 lab_syn = torch.ones((ipc,), device=device, dtype=torch.long) * c
                 if loss_name != "higher":
                     output_real = net(img_real)
@@ -515,6 +554,8 @@ def run_exp(
                     None,
                     device,
                     image_converter,
+                    trivial_augment=trivial_augment,
+                    same_aug_across_batch=False,
                 )
 
         loss_avg /= num_classes * outer_loop

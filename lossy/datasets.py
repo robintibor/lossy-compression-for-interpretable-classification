@@ -8,6 +8,8 @@ import torch as th
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset
 
+from lossy.mimic_cxr import MIMIC_CXR_JPG
+
 
 def get_dataset(
     dataset,
@@ -18,7 +20,9 @@ def get_dataset(
     first_n=None,
     eval_batch_size=256,
     i_classes=None,
+    mimic_cxr_clip=1.0,  # Clip MIMIC CXR Brightness?
 ):
+    assert not standardize
     if dataset == "MNIST":
         channel = 3
         im_size = (32, 32)
@@ -47,8 +51,8 @@ def get_dataset(
         )
         class_names = [str(c) for c in range(num_classes)]
 
-    elif (dataset == "FashionMNIST") or (dataset == 'FASHIONMNIST'):
-        channel = 1
+    elif (dataset == "FashionMNIST") or (dataset == "FASHIONMNIST"):
+        channel = 3
         im_size = (28, 28)
         num_classes = 10
         if not standardize:
@@ -165,32 +169,59 @@ def get_dataset(
         transform = transforms.Compose(
             [
                 transforms.Resize(
-                    (32,32),
+                    (32, 32),
                 ),  # transforms.InterpolationMode.BILINEAR),
                 transforms.ToTensor(),
             ]
         )
         dst_train = torchvision.datasets.CelebA(
             root=data_path,
-            target_type='attr',
+            target_type="attr",
             download=False,
             transform=transform,
-            split='train')
+            split="train",
+        )
         dst_test = torchvision.datasets.CelebA(
             root=data_path,
-            target_type='attr',
+            target_type="attr",
             download=False,
             transform=transform,
-            split='valid')
+            split="valid",
+        )
         class_names = dst_train.attr_names
+    elif dataset == "MIMIC-CXR":
+        mimic_folder = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+        transform = transforms.Compose(
+            [
+                transforms.Resize((32, 32)),
+                transforms.ToTensor(),
+                transforms.Lambda(lambda x: x.clamp_max(mimic_cxr_clip)),
+                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
+            ])
+        # not full dataset there yet
+        n_dicoms_train = 25000
+        dst_train = MIMIC_CXR_JPG(
+            mimic_folder,
+            "train",
+            n_dicoms_train,
+            transform=transform,
+        )
+        dst_test = MIMIC_CXR_JPG(
+            mimic_folder,
+            "validate",
+            n_dicoms_train // 5,
+            transform=transform,
+        )
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 3
+        class_names = dst_train.classes
     else:
         raise NotImplementedError("unknown dataset: %s" % dataset)
 
     if i_classes is not None:
-        dst_train = restrict_dataset_to_classes(
-            dst_train, i_classes, remap_labels=True)
-        dst_test = restrict_dataset_to_classes(
-            dst_test, i_classes, remap_labels=True)
+        dst_train = restrict_dataset_to_classes(dst_train, i_classes, remap_labels=True)
+        dst_test = restrict_dataset_to_classes(dst_test, i_classes, remap_labels=True)
     if first_n is not None:
         dst_train = torch.utils.data.Subset(dst_train, np.arange(0, first_n))
         dst_test = torch.utils.data.Subset(dst_test, np.arange(0, first_n))
@@ -226,149 +257,19 @@ def get_dataset(
     )
 
 
-def get_train_test_datasets(dataset, data_path, standardize):
-    if dataset == "MNIST":
-        channel = 3
-        im_size = (32, 32)
-        num_classes = 10
-        if not standardize:
-            mean = [0]
-            std = [1]
-        else:
-            mean = [0.1307]
-            std = [0.3081]
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(mean=mean, std=std),
-                transforms.Resize(
-                    32,
-                ),  # transforms.InterpolationMode.BILINEAR),
-                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
-            ]
-        )
-        dst_train = torchvision.datasets.MNIST(
-            data_path, train=True, download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.MNIST(
-            data_path, train=False, download=False, transform=transform
-        )
-        class_names = [str(c) for c in range(num_classes)]
-
-    elif dataset == "FashionMNIST":
-        channel = 1
-        im_size = (28, 28)
-        num_classes = 10
-        if not standardize:
-            mean = [0]
-            std = [1]
-        else:
-            mean = [0.2861]
-            std = [0.3530]
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize(mean=mean, std=std),
-                transforms.Resize(
-                    32,
-                ),  # transforms.InterpolationMode.BILINEAR),
-                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
-            ]
-        )
-        dst_train = torchvision.datasets.FashionMNIST(
-            data_path, train=True, download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.FashionMNIST(
-            data_path, train=False, download=False, transform=transform
-        )
-        class_names = dst_train.classes
-
-    elif dataset == "SVHN":
-        channel = 3
-        im_size = (32, 32)
-        num_classes = 10
-        if not standardize:
-            mean = [0.0, 0.0, 0.0]
-            std = [1, 1, 1]
-        else:
-            mean = [0.4377, 0.4438, 0.4728]
-            std = [0.1980, 0.2010, 0.1970]
-        transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
-        )
-        dst_train = torchvision.datasets.SVHN(
-            data_path, split="train", download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.SVHN(
-            data_path, split="test", download=False, transform=transform
-        )
-        class_names = [str(c) for c in range(num_classes)]
-
-    elif dataset == "CIFAR10":
-        channel = 3
-        im_size = (32, 32)
-        num_classes = 10
-        if not standardize:
-            mean = [0.0, 0.0, 0.0]
-            std = [1, 1, 1]
-        else:
-            mean = [0.4914, 0.4822, 0.4465]
-            std = [0.2023, 0.1994, 0.2010]
-        transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
-        )
-        dst_train = torchvision.datasets.CIFAR10(
-            data_path, train=True, download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.CIFAR10(
-            data_path, train=False, download=False, transform=transform
-        )
-        class_names = dst_train.classes
-    elif dataset == "CIFAR100":
-        channel = 3
-        im_size = (32, 32)
-        num_classes = 100
-        if not standardize:
-            mean = [0.0, 0.0, 0.0]
-            std = [1, 1, 1]
-        else:
-            assert False, "need to check values"
-            mean = [0.4914, 0.4822, 0.4465]
-            std = [0.2023, 0.1994, 0.2010]
-        transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
-        )
-        dst_train = torchvision.datasets.CIFAR100(
-            data_path, train=True, download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.CIFAR100(
-            data_path, train=False, download=False, transform=transform
-        )
-        class_names = dst_train.classes
-    elif dataset == "USPS":
-        channel = 3
-        im_size = (32, 32)
-        num_classes = 10
-        assert not standardize
-        transform = transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Resize(
-                    32,
-                ),  # transforms.InterpolationMode.BILINEAR),
-                transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
-            ]
-        )
-        dst_train = torchvision.datasets.USPS(
-            data_path, train=True, download=False, transform=transform
-        )  # no augmentation
-        dst_test = torchvision.datasets.USPS(
-            data_path, train=False, download=False, transform=transform
-        )
-        class_names = [str(c) for c in range(num_classes)]
-    else:
-        raise NotImplementedError("unknown dataset: %s" % dataset)
-    return dst_train, dst_test
+def get_train_test_datasets(dataset, data_path, standardize=False):
+    # For compatibility for prev code
+    assert standardize is False
+    (
+        channel,
+        im_size,
+        num_classes,
+        class_names,
+        trainloader,
+        train_det_loader,
+        testloader,
+    ) = get_dataset(dataset,data_path,standardize=standardize)
+    return trainloader.dataset, testloader.dataset
 
 
 class MixedDataset(torch.utils.data.Dataset):
