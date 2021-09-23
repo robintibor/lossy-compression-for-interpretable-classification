@@ -48,11 +48,11 @@ def get_grid_param_list():
     })
 
     ipc_params = [
-        {
-            "ipc": 1,
-            "outer_loop": 1,
-            "inner_loop": 1,
-        },
+        # {
+        #     "ipc": 1,
+        #     "outer_loop": 1,
+        #     "inner_loop": 1,
+        # },
         {
             "ipc": 1,
             "outer_loop": 5,
@@ -93,7 +93,8 @@ def get_grid_param_list():
             "saved_model_path": [None],#"chenyaofo/pytorch-cifar-models#cifar100_resnet20"
             "trivial_augment": [False],
             "same_aug_across_batch": [False],
-            "mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
+            #"mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
+            "mimic_cxr_target": ['cardiomegaly', 'pleural_effusion',],
         }
     )
 

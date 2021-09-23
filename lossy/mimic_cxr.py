@@ -83,11 +83,58 @@ class MIMIC_CXR_JPG(VisionDataset):
                 axis=0,
             )
 
-            assert np.all((label_arr != -1) == (mask_select))
+            assert np.all((label_arr != -1) == mask_select)
             chexpert_df.loc[:, "label"] = label_arr
             label_df = chexpert_df.copy()
             merge_label_on = ["study_id", "subject_id"]
             class_names = ["No Finding", "Cardiomegaly", "Pleural Effusion"]
+        elif target == "pleural_effusion":
+            chexpert_df = pd.read_csv(
+                os.path.join(mimic_folder, "mimic-cxr-2.0.0-chexpert.csv")
+            )
+            mask_nothing = (chexpert_df.loc[:, "Pleural Effusion"] == 0) & (
+                chexpert_df.loc[:, "No Finding"] == 1
+            )
+
+            mask_pleural = chexpert_df.loc[:, "Pleural Effusion"] == 1
+
+            mask_select = mask_nothing | mask_pleural
+            label_arr = np.full(len(mask_nothing), -1)
+            label_arr = label_arr + np.sum(
+                [mask * (i + 1) for i, mask in enumerate([mask_nothing, mask_pleural])],
+                axis=0,
+            )
+
+            assert np.all((label_arr != -1) == mask_select)
+            chexpert_df.loc[:, "label"] = label_arr
+            label_df = chexpert_df.copy()
+            merge_label_on = ["study_id", "subject_id"]
+            class_names = ["No Finding", "Pleural Effusion"]
+        elif target == "cardiomegaly":
+            chexpert_df = pd.read_csv(
+                os.path.join(mimic_folder, "mimic-cxr-2.0.0-chexpert.csv")
+            )
+            mask_nothing = (chexpert_df.loc[:, "Pleural Effusion"] == 0) & (
+                chexpert_df.loc[:, "No Finding"] == 1
+            )
+
+            mask_cardiomegaly = chexpert_df.loc[:, "Cardiomegaly"] == 1
+
+            mask_select = mask_nothing | mask_cardiomegaly
+            label_arr = np.full(len(mask_nothing), -1)
+            label_arr = label_arr + np.sum(
+                [
+                    mask * (i + 1)
+                    for i, mask in enumerate([mask_nothing, mask_cardiomegaly])
+                ],
+                axis=0,
+            )
+
+            assert np.all((label_arr != -1) == mask_select)
+            chexpert_df.loc[:, "label"] = label_arr
+            label_df = chexpert_df.copy()
+            merge_label_on = ["study_id", "subject_id"]
+            class_names = ["No Finding", "Cardiomegaly"]
         elif target == "age":
             patients_df = pd.read_csv(os.path.join(mimic_folder, "patients.csv"))
             mask_20_40 = (patients_df.anchor_age >= 20) & (patients_df.anchor_age < 40)
@@ -106,22 +153,37 @@ class MIMIC_CXR_JPG(VisionDataset):
             patients_df.loc[:, "label"] = label_arr
             label_df = patients_df.copy()
             merge_label_on = "subject_id"
-            class_names = ["20-39", "40-59", "60-84"]
-        elif target == 'gender':
-            patients_df = pd.read_csv(os.path.join(mimic_folder, 'patients.csv'))
+            class_names = t
+        elif target == "gender":
+            patients_df = pd.read_csv(os.path.join(mimic_folder, "patients.csv"))
             label_arr = patients_df.gender.replace(dict(F=0, M=1))
             patients_df.loc[:, "label"] = label_arr
             assert np.array_equal(np.unique(label_arr), [0, 1])
             label_df = patients_df.copy()
-            merge_label_on = 'subject_id'
-            class_names = ['Female', 'Male', ]
+            merge_label_on = "subject_id"
+            class_names = [
+                "Female",
+                "Male",
+            ]
         else:
             assert False
 
         dicom_df = pd.read_csv(os.path.join(mimic_folder, "mimic-cxr-2.0.0-split.csv"))
         full_df = dicom_df.merge(label_df, on=merge_label_on)
         full_df = full_df[full_df.label != -1]
-        full_df = full_df.iloc[:n_dicoms]
+
+        # Make set balanced between classes,
+        # so determine number of examples by class with least examples
+        labels = np.unique(full_df.label)
+        class_dfs = [full_df[full_df.label == i] for i in labels]
+        n_per_class = min(min(len(d) for d in class_dfs), n_dicoms // len(labels))
+        full_df = (
+            pd.concat([d.iloc[:n_per_class].reset_index(drop=True) for d in class_dfs])
+            .sort_index()
+            .reset_index(drop=True)
+        )
+
+        # full_df = full_df.iloc[:n_dicoms]
         # let's create new split for now
         subject_ids = sorted(full_df.subject_id.unique())
         new_split = np.concatenate(
@@ -158,7 +220,8 @@ class MIMIC_CXR_JPG(VisionDataset):
             )(img)
             img_32_32.save(jpg_32_file)
         img = Image.open(jpg_32_file)
-        target = row['label']
+        target = row["label"]
+        assert target >= 0
 
         if self.transform is not None:
             img = self.transform(img)
