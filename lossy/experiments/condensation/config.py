@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-25000-train-data/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-new-targets/",
         },
     ]
 
@@ -87,12 +87,13 @@ def get_grid_param_list():
             "net_norm": ["instancenorm"],#["no
             # ne", "instancenorm"],
             "net_act": ["relu"],#"relu",
-            "optim_class_img": ["sgd", "adam"],#"sgd",
+            "optim_class_img": ["adam"],#"sgd",
             "loss_name": ["match_loss"],#"grad_grad",
             "rescale_grads": [False,],
             "saved_model_path": [None],#"chenyaofo/pytorch-cifar-models#cifar100_resnet20"
             "trivial_augment": [False],
             "same_aug_across_batch": [False],
+            "mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
         }
     )
 
@@ -146,6 +147,7 @@ def run(
     trivial_augment,
     same_aug_across_batch,
     mimic_cxr_clip,
+    mimic_cxr_target,
 ):
     data_path = '/home/schirrmr/data/pytorch-datasets/'
     model_name = "ConvNet"

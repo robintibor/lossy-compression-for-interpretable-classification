@@ -21,6 +21,7 @@ def get_dataset(
     eval_batch_size=256,
     i_classes=None,
     mimic_cxr_clip=1.0,  # Clip MIMIC CXR Brightness?
+    mimic_cxr_target=None,
 ):
     assert not standardize
     if dataset == "MNIST":
@@ -198,24 +199,25 @@ def get_dataset(
                 transforms.Lambda(lambda x: x.clamp_max(mimic_cxr_clip)),
                 transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
             ])
-        # not full dataset there yet
-        n_dicoms_train = 25000
+        n_dicoms = 60000
         dst_train = MIMIC_CXR_JPG(
             mimic_folder,
+            mimic_cxr_target,
             "train",
-            n_dicoms_train,
+            n_dicoms,
             transform=transform,
         )
         dst_test = MIMIC_CXR_JPG(
             mimic_folder,
+            mimic_cxr_target,
             "validate",
-            n_dicoms_train // 5,
+            n_dicoms,
             transform=transform,
         )
         channel = 3
         im_size = (32, 32)
-        num_classes = 3
         class_names = dst_train.classes
+        num_classes = len(class_names)
     else:
         raise NotImplementedError("unknown dataset: %s" % dataset)
 

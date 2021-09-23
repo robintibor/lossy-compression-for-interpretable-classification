@@ -169,6 +169,7 @@ def run_exp(
     trivial_augment,
     same_aug_across_batch,
     mimic_cxr_clip,
+    mimic_cxr_target,
 ):
     # outer_loop, inner_loop = get_loops(ipc)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -196,7 +197,8 @@ def run_exp(
         dst_train,
         dst_test,
         testloader,
-    ) = get_dataset(dataset, data_path, standardize=False, mimic_cxr_clip=mimic_cxr_clip)
+    ) = get_dataset(dataset, data_path, standardize=False, mimic_cxr_clip=mimic_cxr_clip,
+                    mimic_cxr_target=mimic_cxr_target)
     # strings with model names for evaluation models
     model_eval_pool = get_eval_pool(eval_mode, model_name, model_name)
 

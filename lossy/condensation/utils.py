@@ -25,6 +25,7 @@ def get_dataset(
     standardize=True,
     split_test_off_train=False,
     mimic_cxr_clip=1.0,  # Clip MIMIC CXR Brightness?
+    mimic_cxr_target=None,
 ):
     if dataset == "MNIST":
         channel = 3
@@ -183,7 +184,8 @@ def get_dataset(
             first_n=None,
             eval_batch_size=256,
             i_classes=None,
-            mimic_cxr_clip=mimic_cxr_clip, )
+            mimic_cxr_clip=mimic_cxr_clip,
+            mimic_cxr_target=mimic_cxr_target)
 
         return (
             channel,
