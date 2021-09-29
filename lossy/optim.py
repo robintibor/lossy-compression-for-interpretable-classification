@@ -6,6 +6,14 @@ from rtsutils.util import th_to_np, np_to_th
 import higher
 
 
+def set_grads_to_none(params):
+    for p in params:
+        assert hasattr(p, 'grad')
+        p.grad = None
+        if hasattr(p, 'grad_batch'):
+            p.grad_batch = None
+
+
 def preprocess_for_clf(x):
     mean = {
         'cifar10': (0.4914, 0.4822, 0.4465),

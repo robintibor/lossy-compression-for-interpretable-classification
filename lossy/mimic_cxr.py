@@ -153,7 +153,7 @@ class MIMIC_CXR_JPG(VisionDataset):
             patients_df.loc[:, "label"] = label_arr
             label_df = patients_df.copy()
             merge_label_on = "subject_id"
-            class_names = t
+            class_names = ["20-39", "40-59", "60-84"]
         elif target == "gender":
             patients_df = pd.read_csv(os.path.join(mimic_folder, "patients.csv"))
             label_arr = patients_df.gender.replace(dict(F=0, M=1))
@@ -170,7 +170,7 @@ class MIMIC_CXR_JPG(VisionDataset):
 
         dicom_df = pd.read_csv(os.path.join(mimic_folder, "mimic-cxr-2.0.0-split.csv"))
         full_df = dicom_df.merge(label_df, on=merge_label_on)
-        full_df = full_df[full_df.label != -1]
+        full_df = full_df[full_df.label != -1].sort_values(by='subject_id')
 
         # Make set balanced between classes,
         # so determine number of examples by class with least examples
@@ -183,7 +183,6 @@ class MIMIC_CXR_JPG(VisionDataset):
             .reset_index(drop=True)
         )
 
-        # full_df = full_df.iloc[:n_dicoms]
         # let's create new split for now
         subject_ids = sorted(full_df.subject_id.unique())
         new_split = np.concatenate(

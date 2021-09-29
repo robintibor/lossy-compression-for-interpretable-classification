@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-new-targets/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-balanced/",
         },
     ]
 
@@ -93,8 +93,8 @@ def get_grid_param_list():
             "saved_model_path": [None],#"chenyaofo/pytorch-cifar-models#cifar100_resnet20"
             "trivial_augment": [False],
             "same_aug_across_batch": [False],
-            #"mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
-            "mimic_cxr_target": ['cardiomegaly', 'pleural_effusion',],
+            "mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
+            #"mimic_cxr_target": ['cardiomegaly', 'pleural_effusion',],
         }
     )
 

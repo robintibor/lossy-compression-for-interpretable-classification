@@ -15,3 +15,7 @@ def weighted_sum(total_weight, *args):
 
 def inverse_sigmoid(x):
     return x.log() - (1-x).log()
+
+
+def soft_clip(x, vmin, vmax):
+    return x + (x.clamp(vmin, vmax) -x).detach()
