@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/mimic-cxr-balanced/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/pretrain/",
         },
     ]
 
@@ -43,21 +43,21 @@ def get_grid_param_list():
     ]
 
     data_params = dictlistprod({
-        'dataset': ['MIMIC-CXR'],#, 'MNIST', 'SVHN', 'FashionMNIST'
-        'mimic_cxr_clip': [0.6,1.0],
+        'dataset': ['CIFAR10'],#, 'MNIST', 'SVHN', 'FashionMNIST'
+        'mimic_cxr_clip': [1.0],#0.6,
     })
 
     ipc_params = [
-        # {
-        #     "ipc": 1,
-        #     "outer_loop": 1,
-        #     "inner_loop": 1,
-        # },
         {
             "ipc": 1,
-            "outer_loop": 5,
-            "inner_loop": 5,
+            "outer_loop": 1,
+            "inner_loop": 1,
         },
+        # {
+        #     "ipc": 1,
+        #     "outer_loop": 5,
+        #     "inner_loop": 5,
+        # },
         # {
         #     "ipc": 10,
         #     "outer_loop": 10,
@@ -67,6 +67,7 @@ def get_grid_param_list():
 
     train_params = dictlistprod(
         {
+            "pretrain_dataset": ['CIFAR100'],
             "glow_noise_on_out": [True],
             "n_outer_epochs": [1000],
             "bpd_loss_weight": [0, 10, 100, 1000,10000],#[100000,1000000],
@@ -149,6 +150,7 @@ def run(
     same_aug_across_batch,
     mimic_cxr_clip,
     mimic_cxr_target,
+    pretrain_dataset,
 ):
     data_path = '/home/schirrmr/data/pytorch-datasets/'
     model_name = "ConvNet"

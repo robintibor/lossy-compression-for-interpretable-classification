@@ -104,7 +104,7 @@ def run_exp(
 
     log.info("Create classifier...")
     mean = cf.mean[dataset]
-    std = cf.mean[dataset]
+    std = cf.mean[dataset] # BUG!! should be cf.std
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),

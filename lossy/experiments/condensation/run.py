@@ -28,6 +28,7 @@ from lossy.condensation.utils import (
     epoch,
 )
 
+
 def save_image_from_alpha(
     image_filename, image_syn_alpha, image_converter, num_classes
 ):
@@ -42,7 +43,6 @@ def save_image_from_alpha(
     save_image(image_syn_vis, image_filename, nrow=num_classes)
     # The generated images would be slightly different from the visualization results in the paper,
     # because of the initialization and normalization of pixels.
-
 
 
 def evaluate_models(
@@ -135,6 +135,116 @@ def copy_with_replaced_head(saved_model, num_classes):
     return net
 
 
+def th_to_np(x):
+    return x.detach().cpu().numpy()
+
+
+def get_pretrained_net(
+    pretrain_dataset,
+    data_path,
+    mimic_cxr_clip,
+    mimic_cxr_target,
+    model_name,
+    net_norm,
+    net_act,
+    lr_net,
+    image_converter,
+    n_epochs,
+):
+    tqdm = lambda x: x
+    trange = range
+    import torch as th
+
+    device = "cuda"
+    (
+        channel,
+        im_size,
+        num_pretrain_classes,
+        _,
+        _,
+        _,
+        dst_pretrain_train,
+        dst_pretrain_test,
+        _,
+    ) = get_dataset(
+        pretrain_dataset,
+        data_path,
+        standardize=False,
+        mimic_cxr_clip=mimic_cxr_clip,
+        mimic_cxr_target=mimic_cxr_target,
+    )
+    # strings with model names for evaluation models
+
+    pretrained_net = get_network(
+        model_name,
+        channel,
+        num_pretrain_classes,
+        im_size,
+        net_norm_override=net_norm,
+        net_act_override=net_act,
+    ).to(device)
+
+    optimizer_pretrain = torch.optim.SGD(
+        pretrained_net.parameters(), lr=lr_net, momentum=0.9, weight_decay=0.0005
+    )
+
+    pretrainloader = th.utils.data.DataLoader(
+        dst_pretrain_train, shuffle=True, drop_last=True, batch_size=128, num_workers=2
+    )
+
+    lr_schedule = [n_epochs // 2 + 1]
+    cur_lr_net = lr_net
+    criterion = nn.CrossEntropyLoss()
+    for i_epoch in trange(n_epochs):
+        for X, y in pretrainloader:
+            X = X.cuda()
+            y = y.cuda()
+            img = image_converter.img_orig_to_clf(X)
+            ## augment?
+            output = pretrained_net(img)
+            loss = criterion(output, y)
+            optimizer_pretrain.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer_pretrain.step()
+            optimizer_pretrain.zero_grad(set_to_none=True)
+        if i_epoch in lr_schedule:
+            cur_lr_net *= 0.1
+            optimizer_pretrain = torch.optim.SGD(
+                pretrained_net.parameters(),
+                lr=cur_lr_net,
+                momentum=0.9,
+                weight_decay=0.0005,
+            )
+    pretrain_testloader = th.utils.data.DataLoader(
+        dst_pretrain_test, shuffle=False, drop_last=False, batch_size=128, num_workers=2
+    )
+    import pandas as pd
+
+    eval_df = pd.DataFrame()
+    for X, y in tqdm(pretrain_testloader):
+        X = X.cuda()
+        y = y.cuda()
+        with th.no_grad():
+            img = image_converter.img_orig_to_clf(X)
+            pred_X = th.softmax(pretrained_net(img), dim=1)
+            correct_prob = th.stack([p[a_y] for p, a_y in zip(pred_X, y)])
+        eval_df = pd.concat(
+            (
+                eval_df,
+                pd.DataFrame(
+                    dict(
+                        correct_prob=th_to_np(correct_prob),
+                        correct=th_to_np(pred_X).argmax(axis=1) == th_to_np(y),
+                        y=th_to_np(y),
+                    )
+                ),
+            ),
+            ignore_index=True,
+        )
+    print(eval_df.correct.mean())
+    return pretrained_net
+
+
 def run_exp(
     data_path,
     dataset,
@@ -170,6 +280,7 @@ def run_exp(
     same_aug_across_batch,
     mimic_cxr_clip,
     mimic_cxr_target,
+    pretrain_dataset,
 ):
     # outer_loop, inner_loop = get_loops(ipc)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -197,8 +308,13 @@ def run_exp(
         dst_train,
         dst_test,
         testloader,
-    ) = get_dataset(dataset, data_path, standardize=False, mimic_cxr_clip=mimic_cxr_clip,
-                    mimic_cxr_target=mimic_cxr_target)
+    ) = get_dataset(
+        dataset,
+        data_path,
+        standardize=False,
+        mimic_cxr_clip=mimic_cxr_clip,
+        mimic_cxr_target=mimic_cxr_target,
+    )
     # strings with model names for evaluation models
     model_eval_pool = get_eval_pool(eval_mode, model_name, model_name)
 
@@ -245,7 +361,6 @@ def run_exp(
     def get_images(c, n):  # get random n images from class c
         idx_shuffle = np.random.permutation(indices_class[c])[:n]
         return images_all[idx_shuffle]
-
 
     """ initialize the synthetic data """
     image_syn_alpha = torch.randn(
@@ -307,6 +422,21 @@ def run_exp(
     else:
         saved_model = None
 
+    if pretrain_dataset is not None:
+        n_epochs_pretrain = 50
+        pretrained_net = get_pretrained_net(
+            pretrain_dataset,
+            data_path,
+            mimic_cxr_clip,
+            mimic_cxr_target,
+            model_name,
+            net_norm,
+            net_act,
+            lr_net,
+            image_converter,
+            n_epochs_pretrain,
+        )
+
     for i_outer_epoch in range(n_outer_epochs + 1):
         """ Evaluate synthetic data """
         if i_outer_epoch in i_eval_epochs:
@@ -330,7 +460,7 @@ def run_exp(
                 epoch_eval_train,
                 saved_model,
                 trivial_augment=trivial_augment,
-                same_aug_across_batch=False, # works better with false than passing argument
+                same_aug_across_batch=False,  # works better with false than passing argument
             )
             image_filename = os.path.join(
                 save_path,
@@ -355,6 +485,9 @@ def run_exp(
         # Override net with saved model if given
         if saved_model is not None:
             net = copy_with_replaced_head(saved_model, num_classes)
+        # Override net with pretrained net (but don't use for evaluation)
+        if pretrained_net is not None:
+            net = copy_with_replaced_head(pretrained_net, num_classes)
         net.train()
         net_parameters = list(net.parameters())
         optimizer_net = torch.optim.SGD(

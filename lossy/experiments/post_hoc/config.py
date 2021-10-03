@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/retrain-simplified/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -42,52 +42,29 @@ def get_grid_param_list():
             "debug": False,
         }
     ]
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/'
-    df = load_data_frame(parent_exp_folder)
-    df = df[(df.finished == True) & (df.debug == False)]
-    exp_ids = df[df.n_epochs == 100].index
 
-    exp_params = dictlistprod({
-        'parent_exp_folder': ['/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/'],
-        'exp_id': exp_ids,
+    data_params = dictlistprod({
+        'i_start': range(160,160+160, 32),
+        'images_to_analyze': ['false_pred', 'true_pred']
     })
 
-    train_params = dictlistprod(
-        {
-            "n_epochs": [100],
-            "init_pretrained_clf": [False],#[False, True],
-        }
-    )
+    train_params = dictlistprod({
+        'n_epochs': [5000],
+        "bpd_weight": [1],
+    })
 
     random_params = dictlistprod(
         {
             "np_th_seed": range(1),
         }
     )
-
-    model_params = dictlistprod(
-        {
-            'save_models': [True],
-            "with_batchnorm": [False],
-            "noise_on_simplifier": [True],
-        }
-    )
-    optim_params = dictlistprod(
-        {
-            "weight_decay": [1e-5],
-            "lr_clf": [5e-4],#5e-4,
-        }
-    )
-
     grid_params = product_of_list_of_lists_of_dicts(
         [
             save_params,
-            exp_params,
             train_params,
+            data_params,
             random_params,
             debug_params,
-            model_params,
-            optim_params,
         ]
     )
 
@@ -100,23 +77,15 @@ def sample_config_params(rng, params):
 
 def run(
     ex,
-    parent_exp_folder,
-    exp_id,
-    n_epochs,
-    init_pretrained_clf,
-    lr_clf,
+    i_start,
+    images_to_analyze,
     np_th_seed,
-    weight_decay,
+    n_epochs,
     debug,
-    save_models,
-    with_batchnorm,
-    noise_on_simplifier,
+    bpd_weight,
 ):
     if debug:
         n_epochs = 3
-        first_n = 1024
-    else:
-        first_n = None
     kwargs = locals()
     kwargs.pop("ex")
     if not debug:
@@ -134,7 +103,7 @@ def run(
     )
     start_time = time.time()
     ex.info["finished"] = False
-    from lossy.experiments.retrain_on_simplified.run import run_exp
+    from lossy.experiments.post_hoc.run import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()

@@ -39,6 +39,8 @@ def run_exp(
     weight_decay,
     debug,
     save_models,
+    with_batchnorm,
+    noise_on_simplifier,
 ):
 
     writer = SummaryWriter(output_dir)
@@ -99,21 +101,27 @@ def run_exp(
     # Create model
 
     import wide_resnet.config as cf
-    from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
 
-    nf_net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
-                           activation=activation).cuda()
-    nf_net.apply(conv_init)
-
+    if not with_batchnorm:
+        from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
+        model = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
+                               activation=activation).cuda()
+        model.apply(conv_init)
+    else:
+        activation = "relu" #overwrite for wide resnet for now
+        from wide_resnet.networks.wide_resnet import conv_init, Wide_ResNet
+        model = Wide_ResNet(depth, widen_factor, dropout, num_classes,
+                              activation=activation).cuda()
+        model.apply(conv_init)
     log.info("Create classifier...")
     mean = cf.mean[dataset]
-    std = cf.mean[dataset]
+    std = cf.mean[dataset] # BUG!! should be cf.std
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
     )
 
-    clf = nn.Sequential(normalize, nf_net)
+    clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
     if init_pretrained_clf:
         saved_clf_state_dict = th.load(os.path.join(exp_folder, 'clf_state_dict.th'))
@@ -142,7 +150,8 @@ def run_exp(
     preproc.load_state_dict(th.load(os.path.join(exp_folder, 'preproc_state_dict.th')))
 
     # without noise
-    preproc = preproc[0]
+    if not noise_on_simplifier:
+        preproc = preproc[0]
     preproc.eval()
 
 
@@ -209,7 +218,7 @@ def run_exp(
         return shuffled_loader, det_loader
 
     trainloader_tensors, train_det_loader_tensors = get_tensor_loaders(train_det_loader, preproc, batch_size)
-    _, testloader_tensors = get_tensor_loaders(train_det_loader, preproc, batch_size)
+    _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size)
     nb_res = NoOpResults(0.95)
     for i_epoch in trange(n_epochs):
         for X, y in tqdm(trainloader_tensors):
