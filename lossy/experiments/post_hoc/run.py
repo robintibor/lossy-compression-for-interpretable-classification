@@ -1,11 +1,9 @@
 import json
 import logging
 import os.path
-import sys
 
 import kornia
 import numpy as np
-import pandas as pd
 import torch
 import torch as th
 from braindecode.models.modules import Expression
@@ -13,27 +11,27 @@ from braindecode.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 
-from lossy.affine import AffineOnChans
-from lossy.augment import FixedAugment
-from lossy.datasets import get_dataset
-from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import add_glow_noise_to_0_1, img_0_1_to_glow_img
-from lossy.image_convert import to_plus_minus_one
-from rtsutils.nb_util import NoOpResults
-from rtsutils.plot import stack_images_in_rows, rescale, create_rgb_image
-from rtsutils.util import np_to_th, th_to_np
+from lossy.image_convert import img_0_1_to_glow_img
+from lossy.plot import stack_images_in_rows, rescale, create_rgb_image
+from lossy.util import np_to_th, th_to_np
 from lossy.losses import kl_divergence
-from lossy.util import inverse_sigmoid
 from lossy.util import weighted_sum
 from lossy.optim import set_grads_to_none
 from lossy.grad_alignment import cos_sim_neg_grads, mse_neg_grads
 from lossy.util import soft_clip
+from backpack import extend
+from backpack import backpack
+from lossy.batch_grad import BatchGradNFNets
+from copy import deepcopy
+from lossy import wide_nf_net, data_locations
+from lossy.datasets import get_dataset
 
 log = logging.getLogger(__name__)
 
 
 def run_exp(
-    output_dir, i_start, images_to_analyze, np_th_seed, n_epochs, bpd_weight, debug
+    output_dir, i_start, images_to_analyze, np_th_seed, n_epochs, bpd_weight, debug,
+        saved_model_folder,
 ):
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
@@ -44,7 +42,6 @@ def run_exp(
     trange = range
 
     set_random_seeds(np_th_seed, True)
-    from lossy.datasets import get_dataset
 
     (
         channel,
@@ -54,14 +51,13 @@ def run_exp(
         trainloader,
         train_det_loader,
         testloader,
-    ) = get_dataset("CIFAR10", "/home/schirrmr/pytorch-datasets/", standardize=False)
+    ) = get_dataset("CIFAR10", data_locations.pytorch_data, standardize=False)
 
-    import wide_resnet.config as cf
 
     log.info("Create classifier...")
     dataset = "cifar10"
-    mean = cf.mean[dataset]
-    std = cf.mean[dataset]  # bug to fix at some point...
+    mean = wide_nf_net.mean[dataset]
+    std = wide_nf_net.std[dataset]
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
@@ -69,9 +65,6 @@ def run_exp(
 
     dropout = 0.3
     activation = "elu"  # was elu in past?
-    saved_model_folder = (
-        "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/271/"
-    )
     if saved_model_folder is not None:
         saved_model_config = json.load(
             open(os.path.join(saved_model_folder, "config.json"), "r")
@@ -83,7 +76,7 @@ def run_exp(
             "activation", "elu"
         )  # default was relu.. or elu?
         assert saved_model_config.get("dataset", "cifar10") == dataset
-    from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
+    from lossy.wide_nf_net import conv_init, Wide_NFResNet
 
     nf_net = Wide_NFResNet(
         depth, widen_factor, dropout, num_classes, activation=activation
@@ -99,6 +92,10 @@ def run_exp(
 
     clf.eval()
     log.info("Load generative model...")
+    # allow loading from pickle
+    from lossy import invglow
+    import sys
+    sys.modules['invglow'] = invglow
     glow = torch.load(
         # "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
         "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
@@ -175,16 +172,10 @@ def run_exp(
     weight_unscaled_kl_div = 1
     weight_scaled_kl_div = 1
     mse_weight = 0
-    from backpack import extend
-    from backpack import backpack
-    from lossy.batch_grad import BatchGradNFNets
-    from copy import deepcopy
 
     scaled_clf = deepcopy(clf)
     scaled_clf = extend(scaled_clf)
 
-    nb_res = NoOpResults(0.95)
-    # clf.train()
     clf.eval()
     for i_epoch in trange(n_epochs):
         print(f"Epoch {i_epoch:d}")
@@ -303,66 +294,52 @@ def run_exp(
         set_grads_to_none(scaled_clf.parameters())
         set_grads_to_none(z_alpha_X)
 
-        nb_res.collect(
-            loss=loss.item(),
-            bpd_loss=bpd_loss.item(),
-            scale_factor=scale_factor,
-            cos_dist=cos_dist.item(),
-            kl_div_scaled_orig_simple=kl_div_scaled_orig_simple.item(),
-            kl_div_unscaled_orig_simple=kl_div_unscaled_orig_simple.item(),
-            nan_grads=nan_grads,
-            mse=mse.item() * 1e5,
-        )
-        nb_res.print()
-
         if (i_epoch % 50 == 0) or (i_epoch == (n_epochs - 1)):
-            nb_res.plot_df()
-            with nb_res.output_area("images"):
-                with th.no_grad():
-                    simple_X = glow.invert(z_alpha_X)[0] + 0.5
-                im_arr = stack_images_in_rows(
-                    th_to_np(X), th_to_np(simple_X), n_cols=min(len(X), 8)
-                )
-                padded_im_arr = np.pad(
-                    im_arr,
-                    ((0, 0), (0, 0), (0, 0), (8, 0), (0, 0)),
-                    constant_values=0.8,
-                )
-                im = rescale(create_rgb_image(padded_im_arr), 3)
+            with th.no_grad():
+                simple_X = glow.invert(z_alpha_X)[0] + 0.5
+            im_arr = stack_images_in_rows(
+                th_to_np(X), th_to_np(simple_X), n_cols=min(len(X), 8)
+            )
+            padded_im_arr = np.pad(
+                im_arr,
+                ((0, 0), (0, 0), (0, 0), (8, 0), (0, 0)),
+                constant_values=0.8,
+            )
+            im = rescale(create_rgb_image(padded_im_arr), 3)
 
-                import PIL.ImageDraw as ImageDraw
-                from PIL import ImageFont
+            import PIL.ImageDraw as ImageDraw
+            from PIL import ImageFont
 
-                draw = ImageDraw.Draw(im)
-                font = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14
+            draw = ImageDraw.Draw(im)
+            font = ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14
+            )
+            for i_example, (label, pred_label) in enumerate(
+                zip(labels, pred_labels)
+            ):
+                i_col = i_example % 8
+                i_row = i_example // 8
+                draw.text(
+                    (
+                        i_col * 32 * 3,
+                        i_row * (32 + 8) * 3 * 2 + 2,
+                    ),
+                    label.replace("_", " ").capitalize(),
+                    (0, 0, 0),
+                    font=font,
                 )
-                for i_example, (label, pred_label) in enumerate(
-                    zip(labels, pred_labels)
-                ):
-                    i_col = i_example % 8
-                    i_row = i_example // 8
-                    draw.text(
-                        (
-                            i_col * 32 * 3,
-                            i_row * (32 + 8) * 3 * 2 + 2,
-                        ),
-                        label.replace("_", " ").capitalize(),
-                        (0, 0, 0),
-                        font=font,
-                    )
-                    draw.text(
-                        (
-                            i_col * 32 * 3,
-                            i_row * (32 + 8) * 3 * 2 + (32 + 8) * 3 + 2,
-                        ),
-                        pred_label.replace("_", " ").capitalize(),
-                        (0, 0, 0),
-                        font=font,
-                    )
-                im.save(os.path.join(output_dir, "pred_image.png"))
-            th.save(z_alpha_X, os.path.join(output_dir, "z_alpha.th"))
-            th.save(simple_X_glow, os.path.join(output_dir, "simple_X_glow.th"))
+                draw.text(
+                    (
+                        i_col * 32 * 3,
+                        i_row * (32 + 8) * 3 * 2 + (32 + 8) * 3 + 2,
+                    ),
+                    pred_label.replace("_", " ").capitalize(),
+                    (0, 0, 0),
+                    font=font,
+                )
+            im.save(os.path.join(output_dir, "pred_image.png"))
+        th.save(z_alpha_X, os.path.join(output_dir, "z_alpha.th"))
+        th.save(simple_X_glow, os.path.join(output_dir, "simple_X_glow.th"))
     results = dict(
         loss=loss.item(),
         bpd_loss=bpd_loss.item(),
@@ -373,3 +350,18 @@ def run_exp(
         mse=mse.item() * 1e5,
     )
     return results
+
+
+if __name__ == "__main__":
+    output_dir = "."
+    debug = False
+    i_start = 0
+    images_to_analyze = 'false_pred'
+    n_epochs = 5000
+    bpd_weight = 1
+    np_th_seed = 0
+    saved_model_folder = "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/271/"
+    run_exp(
+        output_dir, i_start, images_to_analyze, np_th_seed, n_epochs, bpd_weight, debug,
+        saved_model_folder
+    )

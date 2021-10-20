@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+import os.path
 
 import numpy as np
 import pandas as pd
@@ -12,12 +13,12 @@ from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
 from torchvision import transforms
 
-from datasetcondensation.networks import ConvNet
+from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.scheduler import WarmupBefore
 from lossy.losses import soft_cross_entropy_from_logits
-from rtsutils.nb_util import NoOpResults
-from rtsutils.util import th_to_np
+from lossy.util import th_to_np
+from lossy import data_locations
 
 trange = range
 tqdm = lambda x: x
@@ -44,7 +45,6 @@ def train_stage(
         assert crop_pad == 0
         aug_fn = nn.Identity()
     for i_epoch in trange(n_epochs):
-        nb_res = NoOpResults(0.98)
         if lr_schedule == "cosine":
             scheduler = CosineAnnealingWarmRestarts(
                 optim, T_0=len(trainloader) * (n_epochs - 1)
@@ -102,16 +102,10 @@ def train_stage(
             optim.step()
             optim.zero_grad(set_to_none=True)
             scheduler.step()
-            res = dict(loss=loss.item())
-            if len(condensed_and_old_nets) > 0:
-                res["condensed_loss"] = condensed_loss.item()
-            nb_res.collect(**res)
-            nb_res.print()
 
         with th.no_grad():
             net_features.eval()
             print(f"Epoch {i_epoch}")
-            nb_res.plot_df()
             epoch_dfs_per_set = {}
             for setname, loaders in loaders_per_dataset.items():
                 epochs_df_per_fold = {}
@@ -175,8 +169,8 @@ def run_exp(
     reset_classifier,
     same_clf_for_all,
     lr_schedule,
-    SVHN_exp_id,
-    MNIST_exp_id,
+    SVHN_exp_folder,
+    MNIST_exp_folder,
     n_repetitions_first_stage,
     crop_pad,
     add_distillation_loss,
@@ -189,9 +183,6 @@ def run_exp(
 
     momentum = 0.9
     decay = 0.0001
-    # SVHN_exp_id = 267
-    # MNIST_exp_id = 277
-    # USPS_exp_id = 290
     writer = SummaryWriter(output_dir)
     writer.flush()
 
@@ -211,7 +202,7 @@ def run_exp(
             testloader,
         ) = get_dataset(
             dataset_name,
-            "/home/schirrmr/data/pytorch-datasets/",
+            data_locations.pytorch_data,
             batch_size=512,
             standardize=False,
             first_n=first_n,
@@ -253,50 +244,34 @@ def run_exp(
     to_0_1 = lambda X, y: (th.sigmoid(X).cuda(), y.cuda())
 
     condensed_per_dataset = {}
-    if SVHN_exp_id is not None:
+    if SVHN_exp_folder is not None:
         condensed_per_dataset["SVHN"] = to_0_1(
-            *th.load(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/res_SVHN_ConvNet_10ipc.pt"
-            )["data"][0]
+            *th.load(os.path.join(SVHN_exp_folder, "res_SVHN_ConvNet_10ipc.pt"))[
+                "data"
+            ][0]
         )
-    if MNIST_exp_id is not None:
+    if MNIST_exp_folder is not None:
         condensed_per_dataset["MNIST"] = to_0_1(
-            *th.load(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/res_MNIST_ConvNet_10ipc.pt"
-            )["data"][0]
+            *th.load(os.path.join(MNIST_exp_folder, "res_MNIST_ConvNet_10ipc.pt"))[
+                "data"
+            ][0]
         )
-        # 'USPS': to_0_1(*th.load(
-        # f'/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{USPS_exp_id:d}/res_USPS_ConvNet_10ipc.pt')['data'][0]),
 
     condensed_results = {}
-    if SVHN_exp_id is not None:
-        condensed_results["svhn_bpd"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/info.json",
-                "r",
-            )
-        )["bpd"]
-        condensed_results["svhn_acc"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{SVHN_exp_id:d}/info.json",
-                "r",
-            )
-        )["acc_mean"]
-    if MNIST_exp_id is not None:
-        condensed_results["mnist_bpd"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/info.json",
-                "r",
-            )
-        )["bpd"]
-        condensed_results["mnist_acc"] = json.load(
-            open(
-                f"/home/schirrmr/data/exps/dataset-condensation/mnist-svhn/{MNIST_exp_id:d}/info.json",
-                "r",
-            )
-        )["acc_mean"]
+    if SVHN_exp_folder is not None:
+        json_info_path = os.path.join(SVHN_exp_folder, "info.json")
+        if os.path.isfile(json_info_path):
+            SVHN_config = json.load(open(json_info_path, "r"))
+            condensed_results["svhn_bpd"] = SVHN_config["bpd"]
+            condensed_results["svhn_acc"] = SVHN_config["acc_mean"]
 
-    # impadd
+    if MNIST_exp_folder is not None:
+        json_info_path = os.path.join(MNIST_exp_folder, "info.json")
+        if os.path.isfile(json_info_path):
+            MNIST_config = json.load(open(json_info_path, "r"))
+            condensed_results["mnist_bpd"] = MNIST_config["bpd"]
+            condensed_results["mnist_acc"] = MNIST_config["acc_mean"]
+
     condensed_and_old_nets = {}
     epoch_dfs_per_stage = []
     n_epochs_so_far = 0
@@ -306,21 +281,19 @@ def run_exp(
             net.parameters(), lr=lrs[i_dataset], weight_decay=decay, momentum=momentum
         )
         if train_old_clfs and (not same_clf_for_all):
-            # impadd
             for d in condensed_and_old_nets.values():
-                optim.add_param_group(dict(params=d['clf'].parameters()))
+                optim.add_param_group(dict(params=d["clf"].parameters()))
         n_repetitions = 1
         if i_dataset == 0:
             n_repetitions = n_repetitions_first_stage
         for _ in range(n_repetitions):
             # Reset LR, necessary in case of multiple repetitions
             for g in optim.param_groups:
-                g['lr'] = lrs[i_dataset]
+                g["lr"] = lrs[i_dataset]
             epoch_dfs_per_set = train_stage(
                 loaders_per_dataset[dataset].train,
                 net_features,
                 net.classifier,
-                # impadd
                 condensed_and_old_nets,
                 optim,
                 n_epochs=n_epochs_per_stage,
@@ -340,7 +313,6 @@ def run_exp(
             else:
                 clf = deepcopy(net.classifier)
             if dataset in condensed_per_dataset:
-                # impadd
                 condensed_and_old_nets[dataset] = dict(
                     Xy=condensed_per_dataset[dataset],
                     net_features=deepcopy(net_features),
@@ -377,3 +349,39 @@ def run_exp(
     results = {**condensed_results, **stage_results}
     writer.flush()
     return results
+
+
+if __name__ == "__main__":
+    n_epochs_per_stage = 50
+    lrs = [0.1, 0.01, 0.01]
+    np_th_seed = 0
+    first_n = None
+    train_old_clfs = False
+    reset_classifier = True
+    same_clf_for_all = False
+    lr_schedule = 'cosine'
+    n_repetitions_first_stage = 3
+    crop_pad = 3
+    add_distillation_loss = False
+    debug = False
+    SVHN_exp_folder = None # to load condensed SVHN dataset
+    MNIST_exp_folder = None # to load condensed MNIST dataset
+    output_dir = "."
+
+    run_exp(
+        output_dir,
+        n_epochs_per_stage,
+        lrs,
+        np_th_seed,
+        first_n,
+        train_old_clfs,
+        reset_classifier,
+        same_clf_for_all,
+        lr_schedule,
+        SVHN_exp_folder,
+        MNIST_exp_folder,
+        n_repetitions_first_stage,
+        crop_pad,
+        add_distillation_loss,
+        debug,
+    )

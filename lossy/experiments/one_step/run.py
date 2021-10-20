@@ -19,16 +19,14 @@ from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import img_0_1_to_glow_img
 from lossy.util import weighted_sum
-from nfnets.base import ScaledStdConv2d
-from nfnets.models.resnet import NFResNetCIFAR, BasicBlock
-from nfnets.models.resnet import activation_fn
-from rtsutils.nb_util import NoOpResults
-from rtsutils.optim import grads_all_finite
-from rtsutils.util import np_to_th, th_to_np
-import wide_resnet.config as cf
+from lossy.optim import grads_all_finite
+from lossy.util import np_to_th, th_to_np
 import logging
 import json
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
+from lossy.wide_nf_net import Wide_NFResNet
+from lossy.wide_nf_net import activation_fn, conv_init
+from lossy import wide_nf_net
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +51,6 @@ def run_exp(
     save_models,
     train_orig,
     dataset,
-    debug,
     noise_before_generator,
     noise_after_simplifier,
     noise_augment_level,
@@ -103,57 +100,36 @@ def run_exp(
     )
 
     log.info("Create classifier...")
-    mean = cf.mean[dataset]
-    std = cf.mean[dataset] # BUG!! should be cf.std
+    mean = wide_nf_net.mean[dataset]
+    std = wide_nf_net.std[dataset]
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
     )
-    if model_name == "wide_nf_net":
-        dropout = 0.3
-        activation = "elu"  # was relu in past
-        if saved_model_folder is not None:
-            saved_model_config = json.load(
-                open(os.path.join(saved_model_folder, "config.json"), "r")
-            )
-            depth = saved_model_config["depth"]
-            widen_factor = saved_model_config["widen_factor"]
-            dropout = saved_model_config["dropout"]
-            activation = saved_model_config.get(
-                "activation", "relu"
-            )  # default was relu
-            assert saved_model_config.get("dataset", "cifar10") == dataset
-        from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
-
-        nf_net = Wide_NFResNet(
-            depth, widen_factor, dropout, num_classes, activation=activation
-        ).cuda()
-        nf_net.apply(conv_init)
-        if saved_model_folder is not None:
-            saved_clf_state_dict = th.load(
-                os.path.join(saved_model_folder, "nf_net_state_dict.th")
-            )
-            nf_net.load_state_dict(saved_clf_state_dict)
-    else:
-        assert model_name == "nf_net"
-        nf_net = NFResNetCIFAR(
-            BasicBlock,
-            [2, 2, 2, 2],
-            num_classes=num_classes,
-            activation="elu",
-            alpha=0.2,
-            beta=1.0,
-            zero_init_residual=zero_init_residual,
-            base_conv=ScaledStdConv2d,
-            n_start_filters=n_start_filters,
-            bias_for_conv=bias_for_conv,
+    dropout = 0.3
+    activation = "elu"  # was relu in past
+    if saved_model_folder is not None:
+        saved_model_config = json.load(
+            open(os.path.join(saved_model_folder, "config.json"), "r")
         )
-        for name, module in nf_net.named_modules():
-            if "Conv2d" in module.__class__.__name__:
-                assert hasattr(module, "weight")
-                nn.init.__dict__[initialization + "_"](module.weight)
-            if hasattr(module, "bias"):
-                module.bias.data.zero_()
+        depth = saved_model_config["depth"]
+        widen_factor = saved_model_config["widen_factor"]
+        dropout = saved_model_config["dropout"]
+        activation = saved_model_config.get(
+            "activation", "relu"
+        )  # default was relu
+        assert saved_model_config.get("dataset", "cifar10") == dataset
+
+    nf_net = Wide_NFResNet(
+        depth, widen_factor, dropout, num_classes, activation=activation
+    ).cuda()
+    nf_net.apply(conv_init)
+    if saved_model_folder is not None:
+        saved_clf_state_dict = th.load(
+            os.path.join(saved_model_folder, "nf_net_state_dict.th")
+        )
+        nf_net.load_state_dict(saved_clf_state_dict)
+
     clf = nn.Sequential(normalize, nf_net)
     clf = clf.cuda()
 
@@ -246,6 +222,7 @@ def run_exp(
                     num_magnitude_bins=31,
                     std_aug_magnitude=std_aug_magnitude,
                     extra_augs=extra_augs,
+                    same_across_batch=False,
                 ),
             )
         else:
@@ -316,6 +293,9 @@ def run_exp(
                 module.scalar.data[:] = 0
 
     log.info("Load generative model...")
+    # allow loading from pickle
+    from lossy import invglow
+    sys.modules['invglow'] = invglow
     glow = torch.load(
         # "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
         "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/10/10_model.th"
@@ -332,9 +312,7 @@ def run_exp(
         _, lp = gen(X)
         bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
         return bpd
-
     log.info("Start training...")
-    nb_res = NoOpResults(0.95)
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
             clf.train()
@@ -422,85 +400,66 @@ def run_exp(
                 im_mse_diff = th.nn.functional.mse_loss(X, simple_X) * 100
                 orig_bpd = get_bpd(gen, X)
                 bpd_diff = th.mean(bpd - orig_bpd.clamp_max(15))
-            nb_res.collect(
-                im_mse_diff=im_mse_diff.item(),
-                f_simple_loss=f_simple_loss.item(),
-                f_simple_loss_before=f_simple_loss_before.item(),
-                f_orig_loss=f_orig_loss.item(),
-                # merge_weight=preproc.merge_weight.item(), might not exist
-                bpd_loss=bpd_loss.item(),
-                bpd_diff=bpd_diff.item(),
-                im_loss=im_loss.item(),
-                clf_loss=clf_loss.item(),
-            )
-            nb_res.print()
-            # with nb_res.output_area('lr'):
-            #    print(f"LR: {opt_clf.param_groups[0]['lr']:.2E}")
         clf.eval()
-        nb_res.plot_df()
-        with nb_res.output_area("accs_losses"):
-            log.info(f"Epoch {i_epoch:d}")
-            results = {}
-            with torch.no_grad():
-                for with_preproc in [True, False]:
-                    for set_name, loader in (
-                        ("train", train_det_loader),
-                        ("test", testloader),
-                    ):
-                        all_preds = []
-                        all_ys = []
-                        all_losses = []
+        log.info(f"Epoch {i_epoch:d}")
+        results = {}
+        with torch.no_grad():
+            for with_preproc in [True, False]:
+                for set_name, loader in (
+                    ("train", train_det_loader),
+                    ("test", testloader),
+                ):
+                    all_preds = []
+                    all_ys = []
+                    all_losses = []
+                    if with_preproc:
+                        all_bpds = []
+                    for X, y in tqdm(loader):
+                        X = X.cuda()
+                        y = y.cuda()
                         if with_preproc:
-                            all_bpds = []
-                        for X, y in tqdm(loader):
-                            X = X.cuda()
-                            y = y.cuda()
-                            if with_preproc:
-                                X_preproced = preproc(X)
-                                bpds = get_bpd(gen, X_preproced)
-                                all_bpds.append(th_to_np(bpds))
-                                preds = clf(X_preproced)
-                            else:
-                                preds = clf(X)
-                            all_preds.append(th_to_np(preds))
-                            all_ys.append(th_to_np(y))
-                            all_losses.append(
-                                th_to_np(
-                                    th.nn.functional.cross_entropy(
-                                        preds, y, reduction="none"
-                                    )
+                            X_preproced = preproc(X)
+                            bpds = get_bpd(gen, X_preproced)
+                            all_bpds.append(th_to_np(bpds))
+                            preds = clf(X_preproced)
+                        else:
+                            preds = clf(X)
+                        all_preds.append(th_to_np(preds))
+                        all_ys.append(th_to_np(y))
+                        all_losses.append(
+                            th_to_np(
+                                th.nn.functional.cross_entropy(
+                                    preds, y, reduction="none"
                                 )
                             )
-                        all_preds = np.concatenate(all_preds)
-                        all_ys = np.concatenate(all_ys)
-                        all_losses = np.concatenate(all_losses)
-                        if with_preproc:
-                            all_bpds = np.concatenate(all_bpds)
-                        acc = np.mean(all_preds.argmax(axis=1) == all_ys)
-                        mean_loss = np.mean(all_losses)
-                        mean_bpd = np.mean(all_bpds)
-                        key = set_name + ["_", "_preproc"][with_preproc]
-                        print(f"{key.capitalize()} Acc:  {acc:.1%}")
-                        print(f"{key.capitalize()} Loss: {mean_loss: .2f}")
-                        if with_preproc:
-                            print(f"{key.capitalize()} BPD: {mean_bpd: .2f}")
-                        writer.add_scalar(key + "_acc", acc * 100, i_epoch)
-                        writer.add_scalar(key + "_loss", mean_loss, i_epoch)
-                        if with_preproc:
-                            writer.add_scalar(key + "_bpd", mean_bpd, i_epoch)
-                        results[key + "_acc"] = acc * 100
-                        results[key + "_loss"] = mean_loss
-                        if with_preproc:
-                            results[key + "_bpd"] = mean_bpd
-                        writer.flush()
-                        sys.stdout.flush()
-        with nb_res.output_area("images"):
+                        )
+                    all_preds = np.concatenate(all_preds)
+                    all_ys = np.concatenate(all_ys)
+                    all_losses = np.concatenate(all_losses)
+                    if with_preproc:
+                        all_bpds = np.concatenate(all_bpds)
+                    acc = np.mean(all_preds.argmax(axis=1) == all_ys)
+                    mean_loss = np.mean(all_losses)
+                    mean_bpd = np.mean(all_bpds)
+                    key = set_name + ["_", "_preproc"][with_preproc]
+                    print(f"{key.capitalize()} Acc:  {acc:.1%}")
+                    print(f"{key.capitalize()} Loss: {mean_loss: .2f}")
+                    if with_preproc:
+                        print(f"{key.capitalize()} BPD: {mean_bpd: .2f}")
+                    writer.add_scalar(key + "_acc", acc * 100, i_epoch)
+                    writer.add_scalar(key + "_loss", mean_loss, i_epoch)
+                    if with_preproc:
+                        writer.add_scalar(key + "_bpd", mean_bpd, i_epoch)
+                    results[key + "_acc"] = acc * 100
+                    results[key + "_loss"] = mean_loss
+                    if with_preproc:
+                        results[key + "_bpd"] = mean_bpd
+                    writer.flush()
+                    sys.stdout.flush()
             X, y = next(testloader.__iter__())
             X = X.cuda()
             y = y.cuda()
             X_preproced = preproc(X)
-            # im = rescale(create_rgb_image(stack_images_in_rows(th_to_np(X), th_to_np(X_preproced), n_cols=16)), 2)
-            # display(im)
             th.save(
                 X_preproced.detach().cpu(),
                 os.path.join(output_dir, "X_preproced.th"),
@@ -516,3 +475,71 @@ def run_exp(
             )
             th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
     return results
+
+if __name__ == "__main__":
+    dataset = 'cifar10'
+    saved_model_folder = None
+
+    n_epochs = 100
+    batch_size = 32
+    train_orig = False
+    noise_augment_level = 0
+    noise_after_simplifier = True
+    noise_before_generator = False
+    trivial_augment = True
+    extra_augs = True
+    np_th_seed = 0
+    depth = 16
+    widen_factor = 2
+    n_start_filters = 64
+    residual_preproc = True
+    model_name = "wide_nf_net"
+    adjust_betas = False
+    save_models = True
+    resample_augmentation = False
+    resample_augmentation_for_clf = False
+    std_aug_magnitude = None
+    weight_decay = 1e-05
+    lr_clf = 0.0005
+    lr_preproc = 0.0005
+    threshold = 0.1
+    optim_type = "adamw"
+    bpd_weight = 0.0
+    first_n = None
+    debug = True
+    if debug:
+        first_n = 1024
+        n_epochs = 3
+    output_dir = "."
+
+    run_exp(
+        output_dir,
+        n_epochs,
+        optim_type,
+        n_start_filters,
+        residual_preproc,
+        model_name,
+        lr_preproc,
+        lr_clf,
+        threshold,
+        bpd_weight,
+        np_th_seed,
+        first_n,
+        batch_size,
+        weight_decay,
+        adjust_betas,
+        saved_model_folder,
+        save_models,
+        train_orig,
+        dataset,
+        noise_before_generator,
+        noise_after_simplifier,
+        noise_augment_level,
+        depth,
+        widen_factor,
+        trivial_augment,
+        resample_augmentation,
+        resample_augmentation_for_clf,
+        std_aug_magnitude,
+        extra_augs,
+    )

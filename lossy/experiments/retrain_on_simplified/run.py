@@ -13,25 +13,22 @@ from braindecode.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 
+from lossy import data_locations
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment
 from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import add_glow_noise_to_0_1
 from lossy.image_convert import to_plus_minus_one
-from rtsutils.nb_util import NoOpResults
-from rtsutils.util import np_to_th, th_to_np
+from lossy.util import np_to_th, th_to_np
 
 log = logging.getLogger(__name__)
-
-
 
 
 def run_exp(
     output_dir,
     first_n,
-    parent_exp_folder,
-    exp_id,
+    saved_exp_folder,
     n_epochs,
     init_pretrained_clf,
     lr_clf,
@@ -53,19 +50,17 @@ def run_exp(
 
     set_random_seeds(np_th_seed, True)
 
-    exp_folder = os.path.join(parent_exp_folder, str(exp_id))
+    config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
+    noise_augment_level = config["noise_augment_level"]
+    saved_model_folder = config["saved_model_folder"]
+    dataset = config["dataset"]
 
-    config = json.load(open(os.path.join(exp_folder, 'config.json'), 'r'))
-    noise_augment_level = config['noise_augment_level']
-    saved_model_folder = config['saved_model_folder']
-    dataset = config['dataset']
-
-    assert config['noise_after_simplifier']
-    batch_size = config['batch_size']
+    assert config["noise_after_simplifier"]
+    batch_size = config["batch_size"]
     split_test_off_train = False
 
     log.info("Load data...")
-    data_path = "/home/schirrmr/data/pytorch-datasets/"
+    data_path = data_locations.pytorch_data
     (
         channel,
         im_size,
@@ -83,39 +78,45 @@ def run_exp(
         first_n=first_n,
     )
 
-    depth = config.get('depth', 28)
-    widen_factor = config.get('widen_factor', 10)
+    depth = config.get("depth", 28)
+    widen_factor = config.get("widen_factor", 10)
     dropout = 0.3
-    activation = 'elu'  # was relu in past
+    activation = "elu"  # was relu in past
     if saved_model_folder is not None:
-        saved_model_config = json.load(open(os.path.join(saved_model_folder, 'config.json'), 'r'))
-        depth = saved_model_config['depth']
-        widen_factor = saved_model_config['widen_factor']
-        dropout = saved_model_config['dropout']
-        activation = saved_model_config.get('activation', 'relu')  # default was relu
-        assert saved_model_config.get('dataset', 'cifar10') == dataset
+        saved_model_config = json.load(
+            open(os.path.join(saved_model_folder, "config.json"), "r")
+        )
+        depth = saved_model_config["depth"]
+        widen_factor = saved_model_config["widen_factor"]
+        dropout = saved_model_config["dropout"]
+        activation = saved_model_config.get("activation", "relu")  # default was relu
+        assert saved_model_config.get("dataset", "cifar10") == dataset
     if init_pretrained_clf:
-        assert config['save_models']
+        assert config["save_models"]
 
     log.info("Create classifier...")
     # Create model
 
-    import wide_resnet.config as cf
+    from lossy import wide_nf_net
 
     if not with_batchnorm:
-        from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
-        model = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
-                               activation=activation).cuda()
+        from lossy.wide_nf_net import conv_init, Wide_NFResNet
+
+        model = Wide_NFResNet(
+            depth, widen_factor, dropout, num_classes, activation=activation
+        ).cuda()
         model.apply(conv_init)
     else:
-        activation = "relu" #overwrite for wide resnet for now
-        from wide_resnet.networks.wide_resnet import conv_init, Wide_ResNet
-        model = Wide_ResNet(depth, widen_factor, dropout, num_classes,
-                              activation=activation).cuda()
+        activation = "relu"  # overwrite for wide resnet for now
+        from lossy.wide_resnet import Wide_ResNet, conv_init
+
+        model = Wide_ResNet(
+            depth, widen_factor, dropout, num_classes, activation=activation
+        ).cuda()
         model.apply(conv_init)
     log.info("Create classifier...")
-    mean = cf.mean[dataset]
-    std = cf.mean[dataset] # BUG!! should be cf.std
+    mean = wide_nf_net.mean[dataset]
+    std = wide_nf_net.std[dataset]
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
@@ -124,13 +125,15 @@ def run_exp(
     clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
     if init_pretrained_clf:
-        saved_clf_state_dict = th.load(os.path.join(exp_folder, 'clf_state_dict.th'))
+        saved_clf_state_dict = th.load(
+            os.path.join(saved_exp_folder, "clf_state_dict.th")
+        )
         clf.load_state_dict(saved_clf_state_dict)
 
     log.info("Create preprocessor...")
     # Create preproc
 
-    assert config['residual_preproc']
+    assert config["residual_preproc"]
     preproc = WrapResidualIdentityUnet(
         nn.Sequential(
             Expression(to_plus_minus_one),
@@ -147,13 +150,14 @@ def run_exp(
         final_nonlin=nn.Sigmoid(),
     ).cuda()
     preproc = nn.Sequential(preproc, Expression(add_glow_noise_to_0_1))
-    preproc.load_state_dict(th.load(os.path.join(exp_folder, 'preproc_state_dict.th')))
+    preproc.load_state_dict(
+        th.load(os.path.join(saved_exp_folder, "preproc_state_dict.th"))
+    )
 
     # without noise
     if not noise_on_simplifier:
         preproc = preproc[0]
     preproc.eval()
-
 
     log.info("Create optimizers...")
     params_with_weight_decay = []
@@ -177,23 +181,28 @@ def run_exp(
         betas=beta_clf,
     )
 
-
     def get_aug_m(X_shape, noise_augment_level):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
         aug_m = nn.Sequential()
-        aug_m.add_module('crop', FixedAugment(
-            kornia.augmentation.RandomCrop(
-                (32, 32),
-                padding=4,
+        aug_m.add_module(
+            "crop",
+            FixedAugment(
+                kornia.augmentation.RandomCrop(
+                    (32, 32),
+                    padding=4,
+                ),
+                X_shape,
             ),
-            X_shape,
-        ), )
+        )
 
-        if dataset in ['cifar10', 'cifar100']:
-            aug_m.add_module('hflip', FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape))
+        if dataset in ["cifar10", "cifar100"]:
+            aug_m.add_module(
+                "hflip",
+                FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
+            )
         else:
-            assert dataset in ['mnist', 'fashionmnist', 'svhn']
-        aug_m.add_module('noise', Expression(lambda x: x + noise))
+            assert dataset in ["mnist", "fashionmnist", "svhn"]
+        aug_m.add_module("noise", Expression(lambda x: x + noise))
 
         return aug_m
 
@@ -210,16 +219,25 @@ def run_exp(
             all_y.append(y.cpu())
         tensor_set = th.utils.data.TensorDataset(th.cat(all_X), th.cat(all_y))
         shuffled_loader = torch.utils.data.DataLoader(
-            tensor_set, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True
+            tensor_set,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=2,
+            drop_last=True,
         )
         det_loader = torch.utils.data.DataLoader(
-            tensor_set, batch_size=256, shuffle=False, num_workers=2, drop_last=False,
+            tensor_set,
+            batch_size=256,
+            shuffle=False,
+            num_workers=2,
+            drop_last=False,
         )
         return shuffled_loader, det_loader
 
-    trainloader_tensors, train_det_loader_tensors = get_tensor_loaders(train_det_loader, preproc, batch_size)
+    trainloader_tensors, train_det_loader_tensors = get_tensor_loaders(
+        train_det_loader, preproc, batch_size
+    )
     _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size)
-    nb_res = NoOpResults(0.95)
     for i_epoch in trange(n_epochs):
         for X, y in tqdm(trainloader_tensors):
             clf.train()
@@ -237,31 +255,34 @@ def run_exp(
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
 
-            nb_res.collect(
-                clf_loss=clf_loss.item())
-            nb_res.print()
-
         clf.eval()
         results = {}
         for loader_name, loader in (
-                ("train_preproc", train_det_loader_tensors),
-                ("train", train_det_loader),
-                ("test_preproc", testloader_tensors),
-                ("test", testloader)):
+            ("train_preproc", train_det_loader_tensors),
+            ("train", train_det_loader),
+            ("test_preproc", testloader_tensors),
+            ("test", testloader),
+        ):
             eval_df = pd.DataFrame()
             for X, y in tqdm(loader):
                 X = X.cuda()
                 y = y.cuda()
-                if 'preproc' in loader_name:
+                if "preproc" in loader_name:
                     X = X + (1 / (2 * 255.0))
                 out = clf(X)
-                loss = th.nn.functional.cross_entropy(
-                    out, y, reduction="none"
+                loss = th.nn.functional.cross_entropy(out, y, reduction="none")
+                eval_df = pd.concat(
+                    (
+                        eval_df,
+                        pd.DataFrame(
+                            dict(
+                                y=th_to_np(y),
+                                pred_label=th_to_np(out.argmax(dim=1)),
+                                loss=th_to_np(loss),
+                            )
+                        ),
+                    )
                 )
-                eval_df = pd.concat((eval_df, pd.DataFrame(
-                    dict(y=th_to_np(y),
-                         pred_label=th_to_np(out.argmax(dim=1)),
-                         loss=th_to_np(loss)))))
             acc = (eval_df.pred_label == eval_df.y).mean()
             mean_loss = np.mean(eval_df.loss)
             key = loader_name
@@ -273,6 +294,36 @@ def run_exp(
             results[key + "_loss"] = mean_loss
             writer.flush()
             sys.stdout.flush()
-            if (save_models and not debug):
-                th.save(clf.state_dict(), os.path.join(output_dir, 'clf_state_dict.th'))
+            if save_models and not debug:
+                th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
     return results
+
+
+if __name__ == "__main__":
+    n_epochs = 100
+    init_pretrained_clf = False
+    np_th_seed = 0
+    save_models = True
+    with_batchnorm = False
+    noise_on_simplifier = True
+    weight_decay = 1e-05
+    lr_clf = 0.0005
+    first_n = None
+    saved_exp_folder = "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/257/"
+    debug = False
+
+    output_dir = "."
+    run_exp(
+        output_dir,
+        first_n,
+        saved_exp_folder,
+        n_epochs,
+        init_pretrained_clf,
+        lr_clf,
+        np_th_seed,
+        weight_decay,
+        debug,
+        save_models,
+        with_batchnorm,
+        noise_on_simplifier,
+    )

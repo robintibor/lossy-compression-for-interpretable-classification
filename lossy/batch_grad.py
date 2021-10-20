@@ -1,32 +1,8 @@
-from backpack.extensions.firstorder.base import FirstOrderModuleExtension
-
-from torch.nn import (
-    BatchNorm1d,
-    Conv1d,
-    Conv2d,
-    Conv3d,
-    ConvTranspose1d,
-    ConvTranspose2d,
-    ConvTranspose3d,
-    Linear,
-)
-import torch as th
-import torch
 import numpy as np
-
-from backpack.extensions.firstorder.batch_grad.batch_grad_base import BatchGradBase
-from numpy import prod
-from torch import einsum
-from torch.nn import Conv1d, Conv2d, Conv3d
-from torch.nn.grad import _grad_input_padding
-from torch.nn.functional import conv2d
-
-from backpack.core.derivatives.basederivatives import BaseParameterDerivatives
-from backpack.utils import conv as convUtils
-from backpack.utils.ein import eingroup
-
+import torch
+import torch as th
 from backpack.extensions.backprop_extension import BackpropExtension
-from backpack.core.derivatives.conv2d import Conv2DDerivatives
+from backpack.extensions.firstorder.base import FirstOrderModuleExtension
 from backpack.extensions.firstorder.batch_grad import (
     batchnorm1d,
     conv1d,
@@ -37,8 +13,18 @@ from backpack.extensions.firstorder.batch_grad import (
     conv_transpose3d,
     linear,
 )
-from backpack.extensions.firstorder.batch_grad.batch_grad_base import BatchGradBase
-from nfnets.base import ScaledStdConv2d
+from backpack.utils.ein import eingroup
+from torch.nn import (
+    BatchNorm1d,
+    ConvTranspose1d,
+    ConvTranspose2d,
+    ConvTranspose3d,
+    Linear,
+)
+from torch.nn import Conv1d, Conv2d, Conv3d
+
+from lossy.wide_nf_net import ScaledStdConv2d
+
 
 class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
     """Extract individual gradients for ``ScaleModule``."""
@@ -50,7 +36,13 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         # https://github.com/f-dangel/backpack/blob/6a1ac373b01f4e4cd5d4836c0af60f30e6854abe/backpack/core/derivatives/convnd.py#L22
         self.dim_text = "x,y"
         self.conv_dims = 2
-        super().__init__(params=["gain", "weight", "bias", ])
+        super().__init__(
+            params=[
+                "gain",
+                "weight",
+                "bias",
+            ]
+        )
 
     def gain(self, ext, module, g_inp, g_out, bpQuantities):
         """Extract individual gradients for ScaleModule's ``weight`` parameter.
@@ -137,7 +129,8 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         grad_weight_before_gain = grad_on_computed_weight.squeeze(0) * module.gain
         grad_weight_before_scale = grad_weight_before_gain * module.scale
         grad_weight_before_mean = grad_weight_before_scale - th.mean(
-            grad_weight_before_scale, dim=(2,3,4), keepdim=True)
+            grad_weight_before_scale, dim=(2, 3, 4), keepdim=True
+        )
 
         # Account for std transformation
         grad_outer_w = grad_weight_before_mean
@@ -148,15 +141,20 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
         n_x = len(grad_outer_w)
         grad_outer_w_flat = th.flatten(grad_outer_w, start_dim=2)
         std = torch.std(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
-        grad_w_s = 0.5 * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True)) / (n_params_per_w * th.sqrt(std * std))
+        grad_w_s = (
+            0.5
+            * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True))
+            / (n_params_per_w * th.sqrt(std * std))
+        )
         grad_w_1_div_s = -(1 / ((std + eps) * (std + eps))) * grad_w_s
         grad_w_1_div_s_flat = th.flatten(grad_w_1_div_s, start_dim=1)
 
         # unsqueeze(0) for example dim
         grad_on_factor_per_w_p = grad_outer_w_flat * flat_w.unsqueeze(0)
 
-        grad_on_w_through_std = (grad_on_factor_per_w_p.sum(dim=2, keepdim=True) *
-                                 grad_w_1_div_s_flat).reshape(n_x, *w.shape)
+        grad_on_w_through_std = (
+            grad_on_factor_per_w_p.sum(dim=2, keepdim=True) * grad_w_1_div_s_flat
+        ).reshape(n_x, *w.shape)
 
         grad_on_w_direct = grad_outer_w * (1 / (std.unsqueeze(0) + eps))
         grad_weight = grad_on_w_direct + grad_on_w_through_std

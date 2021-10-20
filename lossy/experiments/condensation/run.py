@@ -1,5 +1,6 @@
 import copy
 import os
+import sys
 from copy import deepcopy
 
 import higher
@@ -8,7 +9,7 @@ import torch
 from torch import nn
 from torchvision.utils import save_image
 
-from invglow.invertible.expression import Expression
+from lossy.invglow.invertible.expression import Expression
 from lossy.augment import TrivialAugmentPerImage
 from lossy.image_convert import (
     ImageConverter,
@@ -333,6 +334,9 @@ def run_exp(
     # robintibor@gmail.com
     # Load glow
     print("Loading glow...")
+    # ensure glow model can be loaded from pickle
+    import lossy
+    sys.modules['invglow'] = lossy.invglow
     gen = torch.load(
         "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
     )
@@ -436,6 +440,8 @@ def run_exp(
             image_converter,
             n_epochs_pretrain,
         )
+    else:
+        pretrained_net = None
 
     for i_outer_epoch in range(n_outer_epochs + 1):
         """ Evaluate synthetic data """
@@ -738,3 +744,79 @@ def run_exp(
         )
 
     return results
+
+if __name__ == '__main__':
+    from lossy import data_locations
+    pretrain_dataset = None
+    glow_noise_on_out = True
+    n_outer_epochs = 1000
+    bpd_loss_weight = 10
+    img_alpha_init_factor = 0.2
+    image_standardize_before_glow = False
+    sigmoid_on_alpha = True
+    lr_img = 0.1
+    lr_net = 1e-2
+    standardize_for_clf = False
+    net_norm = "instancenorm"
+    net_act = "relu"
+    optim_class_img = "adam"
+    loss_name = "match_loss"
+    rescale_grads = False
+    saved_model_path = None
+    trivial_augment = False
+    same_aug_across_batch = False
+    mimic_cxr_target = None  # ['gender', 'age', 'disease']
+    ipc = 1
+    outer_loop = 1
+    inner_loop = 1
+    dataset = 'CIFAR10'
+    mimic_cxr_clip = 1.0
+    data_path = data_locations.pytorch_data
+    model_name = "ConvNet"
+    batch_real = 256
+    batch_train = 256
+    init = "noise"
+    dis_metric = "ours"
+    epoch_eval_train = 300
+    num_exp = 1
+    num_eval = 5
+    eval_mode = "S"
+    save_path = "."
+
+    run_exp(
+        data_path,
+        dataset,
+        ipc,
+        n_outer_epochs,
+        model_name,
+        batch_train,
+        batch_real,
+        init,
+        lr_img,
+        lr_net,
+        dis_metric,
+        epoch_eval_train,
+        num_exp,
+        num_eval,
+        eval_mode,
+        save_path,
+        bpd_loss_weight,
+        image_standardize_before_glow,
+        img_alpha_init_factor,
+        sigmoid_on_alpha,
+        standardize_for_clf,
+        net_norm,
+        net_act,
+        loss_name,
+        optim_class_img,
+        outer_loop,
+        inner_loop,
+        saved_model_path,
+        rescale_grads,
+        glow_noise_on_out,
+        trivial_augment,
+        same_aug_across_batch,
+        mimic_cxr_clip,
+        mimic_cxr_target,
+        pretrain_dataset,
+    )

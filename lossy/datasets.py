@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset
 
 from lossy.mimic_cxr import MIMIC_CXR_JPG
+from lossy import data_locations
 
 
 def get_dataset(
@@ -191,7 +192,7 @@ def get_dataset(
         )
         class_names = dst_train.attr_names
     elif dataset == "MIMIC-CXR":
-        mimic_folder = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+        mimic_folder = data_locations.mimic_cxr
         transform = transforms.Compose(
             [
                 transforms.Resize((32, 32)),

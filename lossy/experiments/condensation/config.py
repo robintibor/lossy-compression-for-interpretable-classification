@@ -94,7 +94,7 @@ def get_grid_param_list():
             "saved_model_path": [None],#"chenyaofo/pytorch-cifar-models#cifar100_resnet20"
             "trivial_augment": [False],
             "same_aug_across_batch": [False],
-            "mimic_cxr_target": ['race', 'gender', 'age', 'disease'],
+            "mimic_cxr_target": [None],#['race', 'gender', 'age', 'disease'],
             #"mimic_cxr_target": ['cardiomegaly', 'pleural_effusion',],
         }
     )
