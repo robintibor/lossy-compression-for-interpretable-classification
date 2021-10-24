@@ -13,7 +13,7 @@ os.sys.path.insert(0, '/home/schirrmr/code/cifar10-clf/')
 
 import numpy as np
 import torch
-from braindecode.util import set_random_seeds
+from lossy.util import set_random_seeds
 
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s : %(message)s")
@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/condensation/pretrain/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/condensation/pretrain/",
         },
     ]
 
@@ -187,6 +187,11 @@ def run(
     start_time = time.time()
     ex.info["finished"] = False
 
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
     from lossy.experiments.condensation.run import run_exp
 
     results = run_exp(**kwargs)

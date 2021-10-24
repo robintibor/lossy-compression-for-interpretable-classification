@@ -6,11 +6,12 @@ import kornia
 import numpy as np
 import torch
 import torch as th
-from braindecode.models.modules import Expression
-from braindecode.util import set_random_seeds
+from lossy.modules import Expression
+from lossy.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 
+from lossy.glow import load_small_glow
 from lossy.image_convert import img_0_1_to_glow_img
 from lossy.plot import stack_images_in_rows, rescale, create_rgb_image
 from lossy.util import np_to_th, th_to_np
@@ -92,14 +93,7 @@ def run_exp(
 
     clf.eval()
     log.info("Load generative model...")
-    # allow loading from pickle
-    from lossy import invglow
-    import sys
-    sys.modules['invglow'] = invglow
-    glow = torch.load(
-        # "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-        "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
-    )
+    glow = load_small_glow()
 
     gen = nn.Sequential(Expression(img_0_1_to_glow_img), glow)
 
@@ -360,7 +354,7 @@ if __name__ == "__main__":
     n_epochs = 5000
     bpd_weight = 1
     np_th_seed = 0
-    saved_model_folder = "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/271/"
+    saved_model_folder = None  # has to be set to model that was saved from one_step/run.py
     run_exp(
         output_dir, i_start, images_to_analyze, np_th_seed, n_epochs, bpd_weight, debug,
         saved_model_folder

@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch as th
-from braindecode.models.modules import Expression
-from braindecode.util import set_random_seeds
+from lossy.modules import Expression
+from lossy.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 
@@ -309,7 +309,7 @@ if __name__ == "__main__":
     weight_decay = 1e-05
     lr_clf = 0.0005
     first_n = None
-    saved_exp_folder = "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/257/"
+    saved_exp_folder =  None  # has to be set to model that was saved from one_step/run.py
     debug = False
 
     output_dir = "."

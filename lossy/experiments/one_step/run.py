@@ -6,8 +6,8 @@ import kornia
 import numpy as np
 import torch
 import torch as th
-from braindecode.models.modules import Expression
-from braindecode.util import set_random_seeds
+from lossy.modules import Expression
+from lossy.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 from torchvision.utils import save_image
@@ -16,6 +16,7 @@ import higher
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
 from lossy.datasets import get_dataset
+from lossy.glow import load_small_glow
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import img_0_1_to_glow_img
 from lossy.util import weighted_sum
@@ -26,7 +27,7 @@ import json
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 from lossy.wide_nf_net import Wide_NFResNet
 from lossy.wide_nf_net import activation_fn, conv_init
-from lossy import wide_nf_net
+from lossy import wide_nf_net, data_locations
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def run_exp(
     bias_for_conv = True
 
     log.info("Load data...")
-    data_path = "/home/schirrmr/data/pytorch-datasets/"
+    data_path = data_locations.pytorch_data
     (
         channel,
         im_size,
@@ -293,13 +294,7 @@ def run_exp(
                 module.scalar.data[:] = 0
 
     log.info("Load generative model...")
-    # allow loading from pickle
-    from lossy import invglow
-    sys.modules['invglow'] = invglow
-    glow = torch.load(
-        # "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-        "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/10/10_model.th"
-    )
+    glow = load_small_glow()
 
     gen = nn.Sequential()
     gen.add_module("to_glow_range", Expression(img_0_1_to_glow_img))

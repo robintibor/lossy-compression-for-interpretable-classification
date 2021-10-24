@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from torchvision.utils import save_image
 
+from lossy.glow import load_normal_glow
 from lossy.invglow.invertible.expression import Expression
 from lossy.augment import TrivialAugmentPerImage
 from lossy.image_convert import (
@@ -39,8 +40,6 @@ def save_image_from_alpha(
     )
     image_syn_vis[image_syn_vis < 0] = 0.0
     image_syn_vis[image_syn_vis > 1] = 1.0
-    # save_image(image_syn_vis, save_name, nrow=ipc)
-    # robintibor@gmail.com
     save_image(image_syn_vis, image_filename, nrow=num_classes)
     # The generated images would be slightly different from the visualization results in the paper,
     # because of the initialization and normalization of pixels.
@@ -331,15 +330,9 @@ def run_exp(
     total_loss_weight = 10
     print("Evaluation model pool: ", model_eval_pool)
 
-    # robintibor@gmail.com
     # Load glow
     print("Loading glow...")
-    # ensure glow model can be loaded from pickle
-    import lossy
-    sys.modules['invglow'] = lossy.invglow
-    gen = torch.load(
-        "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-    )
+    gen = load_normal_glow()
 
     """ organize the real dataset """
 
@@ -632,8 +625,6 @@ def run_exp(
                 )
             else:
                 assert (not rescale_grads) or (loss_name == "match_loss")
-            # robintibor@gmail.com: add bpd loss
-            # let's standardize! robintibor@gmail.com
             bpd_loss_applied = (bpd_loss_weight is not None) and (bpd_loss_weight > 0)
             with torch.set_grad_enabled(bpd_loss_applied):
                 all_bpds = []
@@ -662,7 +653,6 @@ def run_exp(
 
             optimizer_img.step()
             loss_avg += sum_loss_over_classes
-            # robintibor@gmail.com
             bpd_avg += all_bpds.mean()
             if bpd_loss_applied:
                 del bpd_loss, bpd, img_for_glow
@@ -700,10 +690,8 @@ def run_exp(
                 )
 
         loss_avg /= num_classes * outer_loop
-        # robintibor@gmail.com
         bpd_avg /= outer_loop
 
-        # robintibor@gmail.com
         if i_outer_epoch % 10 == 0:
             print(
                 "%s iter = %04d, loss = %.4f bpd = %.4f"

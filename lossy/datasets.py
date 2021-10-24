@@ -46,10 +46,10 @@ def get_dataset(
             ]
         )
         dst_train = torchvision.datasets.MNIST(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.MNIST(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
 
@@ -74,10 +74,10 @@ def get_dataset(
             ]
         )
         dst_train = torchvision.datasets.FashionMNIST(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.FashionMNIST(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = dst_train.classes
 
@@ -95,10 +95,10 @@ def get_dataset(
             [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
         )
         dst_train = torchvision.datasets.SVHN(
-            data_path, split="train", download=False, transform=transform
+            data_path, split="train", download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.SVHN(
-            data_path, split="test", download=False, transform=transform
+            data_path, split="test", download=True, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
 
@@ -116,10 +116,10 @@ def get_dataset(
             [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
         )
         dst_train = torchvision.datasets.CIFAR10(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.CIFAR10(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = dst_train.classes
     elif dataset == "CIFAR100":
@@ -137,10 +137,10 @@ def get_dataset(
             [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
         )
         dst_train = torchvision.datasets.CIFAR100(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.CIFAR100(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = dst_train.classes
     elif dataset == "USPS":
@@ -158,10 +158,10 @@ def get_dataset(
             ]
         )
         dst_train = torchvision.datasets.USPS(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = torchvision.datasets.USPS(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
     elif dataset == "CELEBA":
@@ -179,14 +179,14 @@ def get_dataset(
         dst_train = torchvision.datasets.CelebA(
             root=data_path,
             target_type="attr",
-            download=False,
+            download=True,
             transform=transform,
             split="train",
         )
         dst_test = torchvision.datasets.CelebA(
             root=data_path,
             target_type="attr",
-            download=False,
+            download=True,
             transform=transform,
             split="valid",
         )

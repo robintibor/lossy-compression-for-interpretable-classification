@@ -5,8 +5,8 @@ import os.path
 import numpy as np
 import pandas as pd
 import torch as th
-from braindecode.models.modules import Expression
-from braindecode.util import set_random_seeds
+from lossy.modules import Expression
+from lossy.util import set_random_seeds
 from kornia.augmentation import RandomCrop
 from tensorboardX.writer import SummaryWriter
 from torch import nn

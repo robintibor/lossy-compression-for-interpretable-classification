@@ -17,7 +17,7 @@ def glow_img_to_img_0_1(image):
 
 
 def img_0_1_to_glow_img(img_0_1):
-    image_glow = ((img_0_1 * (255/256.0)) - 0.5)#could add + (1/256*2)?robintibor@gmail.com or add at eval?
+    image_glow = ((img_0_1 * (255/256.0)) - 0.5)#could add + (1/256*2)? or add at eval?
     return image_glow
 
 def img_0_1_to_cifar100_standardized(img):

@@ -98,10 +98,10 @@ def get_dataset(
             ]
         )
         dst_train = datasets.USPS(
-            data_path, train=True, download=False, transform=transform
+            data_path, train=True, download=True, transform=transform
         )  # no augmentation
         dst_test = datasets.USPS(
-            data_path, train=False, download=False, transform=transform
+            data_path, train=False, download=True, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
     elif dataset == "SVHN":

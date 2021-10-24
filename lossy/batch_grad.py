@@ -58,7 +58,7 @@ class BatchGradScaledStdConv2d(FirstOrderModuleExtension):
             torch.Tensor: individual gradients
         """
 
-        # hope this is correct robintibor@gmail.com
+        # hope this is correct
         mat = g_out[0].unsqueeze(0)
         sum_batch = False
         if module.groups != 1:
