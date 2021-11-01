@@ -18,7 +18,7 @@ from lossy.augment import FixedAugment, TrivialAugmentPerImage
 from lossy.datasets import get_dataset
 from lossy.glow import load_small_glow
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import img_0_1_to_glow_img
+from lossy.image_convert import img_0_1_to_glow_img, quantize_data
 from lossy.util import weighted_sum
 from lossy.optim import grads_all_finite
 from lossy.util import np_to_th, th_to_np
@@ -62,6 +62,7 @@ def run_exp(
     resample_augmentation_for_clf,
     std_aug_magnitude,
     extra_augs,
+    quantize_after_simplifier,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
@@ -173,8 +174,12 @@ def run_exp(
             AffineOnChans(3),  # Does this even make sense after sigmoid?
         ).cuda()
         preproc[2].factors.data[:] = 0.1
+    preproc_post = nn.Sequential()
+    if quantize_after_simplifier:
+        preproc_post.add_module("quantize", Expression(quantize_data))
     if noise_after_simplifier:
-        preproc = nn.Sequential(preproc, Expression(add_glow_noise_to_0_1))
+        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
+    preproc = nn.Sequential(preproc, preproc_post)
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []

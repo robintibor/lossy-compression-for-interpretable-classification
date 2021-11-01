@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/home/schirrmr/data/exps/lossy/continual/mnist-svhn-usps/",
+            "save_folder": "/home/schirrmr/data/exps/rebuttal/continual/mnist-svhn-usps/",
         }
     ]
 

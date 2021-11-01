@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-trivial-augment/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -61,8 +61,8 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        #'dataset': ['mnist', 'fashionmnist', 'cifar10', 'svhn'],
-        'dataset': ['cifar10'],#, 'mnist'],
+        'dataset': ['mnist', 'fashionmnist', 'svhn'],
+        #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
     })
 
@@ -79,14 +79,27 @@ def get_grid_param_list():
             "noise_augment_level": 0,
             "noise_after_simplifier": True,
             "noise_before_generator": False,
-            'trivial_augment': True,
-            'extra_augs': True,
+            'trivial_augment': False,
+            'extra_augs': False,
         },
     ]
 
+    quantize_params = dictlistprod(
+        {
+            "np_th_seed": range(1),
+            #"np_th_seed": [0],
+            'quantize_after_simplifier': [True,False],
+        }
+    ) + dictlistprod(
+        {
+            "np_th_seed": range(1,3),
+            #"np_th_seed": [0],
+            'quantize_after_simplifier': [True,],
+        }
+    )
+
     random_params = dictlistprod(
         {
-            "np_th_seed": range(3),
             #"np_th_seed": [0],
         }
     )
@@ -136,6 +149,7 @@ def get_grid_param_list():
             model_params,
             optim_params,
             data_params,
+            quantize_params,
             noise_params,
         ]
     )
@@ -177,14 +191,17 @@ def run(
     resample_augmentation_for_clf,
     std_aug_magnitude,
     extra_augs,
+    quantize_after_simplifier
 ):
     if debug:
         n_epochs = 3
         first_n = 1024
+        save_models = False
     else:
         first_n = None
     kwargs = locals()
     kwargs.pop("ex")
+    kwargs.pop("debug")
     if not debug:
         log.setLevel("INFO")
     file_obs = ex.observers[0]
@@ -200,6 +217,13 @@ def run(
     )
     start_time = time.time()
     ex.info["finished"] = False
+
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+
     from lossy.experiments.one_step.run import run_exp
 
     results = run_exp(**kwargs)

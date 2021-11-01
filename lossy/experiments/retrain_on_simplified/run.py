@@ -18,7 +18,7 @@ from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment
 from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import add_glow_noise_to_0_1
+from lossy.image_convert import add_glow_noise_to_0_1, quantize_data
 from lossy.image_convert import to_plus_minus_one
 from lossy.util import np_to_th, th_to_np
 
@@ -38,6 +38,7 @@ def run_exp(
     save_models,
     with_batchnorm,
     noise_on_simplifier,
+    restandardize_inputs,
 ):
 
     writer = SummaryWriter(output_dir)
@@ -114,25 +115,8 @@ def run_exp(
             depth, widen_factor, dropout, num_classes, activation=activation
         ).cuda()
         model.apply(conv_init)
-    log.info("Create classifier...")
-    mean = wide_nf_net.mean[dataset]
-    std = wide_nf_net.std[dataset]
-    normalize = kornia.augmentation.Normalize(
-        mean=np_to_th(mean, device="cpu", dtype=np.float32),
-        std=np_to_th(std, device="cpu", dtype=np.float32),
-    )
-
-    clf = nn.Sequential(normalize, model)
-    clf = clf.cuda()
-    if init_pretrained_clf:
-        saved_clf_state_dict = th.load(
-            os.path.join(saved_exp_folder, "clf_state_dict.th")
-        )
-        clf.load_state_dict(saved_clf_state_dict)
 
     log.info("Create preprocessor...")
-    # Create preproc
-
     assert config["residual_preproc"]
     preproc = WrapResidualIdentityUnet(
         nn.Sequential(
@@ -149,15 +133,48 @@ def run_exp(
         ),
         final_nonlin=nn.Sigmoid(),
     ).cuda()
-    preproc = nn.Sequential(preproc, Expression(add_glow_noise_to_0_1))
+
+    preproc_post = nn.Sequential()
+    if config['quantize_after_simplifier']:
+        preproc_post.add_module("quantize", Expression(quantize_data))
+    if config['noise_after_simplifier']:
+        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
+    preproc = nn.Sequential(preproc, preproc_post)
     preproc.load_state_dict(
         th.load(os.path.join(saved_exp_folder, "preproc_state_dict.th"))
     )
 
-    # without noise
-    if not noise_on_simplifier:
-        preproc = preproc[0]
     preproc.eval()
+
+    log.info("Add normalizer to classifier...")
+    if restandardize_inputs:
+        all_simple_X = []
+        for X, y in train_det_loader:
+            X = X.cuda()
+            with th.no_grad():
+                simple_X = preproc(X)
+                all_simple_X.append(simple_X)
+
+        mean = th.cat(all_simple_X).mean(dim=(0, 2, 3)).detach()
+
+        std = th.cat(all_simple_X).std(dim=(0, 2, 3)).detach()
+    else:
+        mean = np_to_th(wide_nf_net.mean[dataset], device="cpu", dtype=np.float32)
+        std = np_to_th(wide_nf_net.std[dataset], device="cpu", dtype=np.float32)
+    normalize = kornia.augmentation.Normalize(
+        mean=mean,
+        std=std,
+    )
+
+    clf = nn.Sequential(normalize, model)
+    clf = clf.cuda()
+    if init_pretrained_clf:
+        saved_clf_state_dict = th.load(
+            os.path.join(saved_exp_folder, "clf_state_dict.th")
+        )
+        clf.load_state_dict(saved_clf_state_dict)
+
+
 
     log.info("Create optimizers...")
     params_with_weight_decay = []
@@ -257,6 +274,7 @@ def run_exp(
 
         clf.eval()
         results = {}
+        print(f"Epoch {i_epoch:d}")
         for loader_name, loader in (
             ("train_preproc", train_det_loader_tensors),
             ("train", train_det_loader),

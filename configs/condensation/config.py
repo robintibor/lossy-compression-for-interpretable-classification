@@ -43,7 +43,7 @@ def get_grid_param_list():
     ]
 
     data_params = dictlistprod({
-        'dataset': ['CIFAR10'],#, 'MNIST', 'SVHN', 'FashionMNIST'
+        'dataset': ['CIFAR10', 'MNIST', 'SVHN', 'FashionMNIST'],#, 'MNIST', 'SVHN', 'FashionMNIST'
         'mimic_cxr_clip': [1.0],#0.6,
     })
 
@@ -58,19 +58,19 @@ def get_grid_param_list():
         #     "outer_loop": 5,
         #     "inner_loop": 5,
         # },
-        # {
-        #     "ipc": 10,
-        #     "outer_loop": 10,
-        #     "inner_loop": 50,
-        # }
+        {
+            "ipc": 10,
+            "outer_loop": 10,
+            "inner_loop": 50,
+        }
     ]
 
     train_params = dictlistprod(
         {
-            "pretrain_dataset": ['CIFAR100'],
+            "pretrain_dataset": [None],
             "glow_noise_on_out": [True],
             "n_outer_epochs": [1000],
-            "bpd_loss_weight": [0, 10, 100, 1000,10000],#[100000,1000000],
+            "bpd_loss_weight": [100000,1000000],#[0, 10, 100, 1000,10000],#
             "img_alpha_init_factor": [
                 0.2,
             ],  # 10.1,0.4
@@ -96,12 +96,14 @@ def get_grid_param_list():
             "same_aug_across_batch": [False],
             "mimic_cxr_target": [None],#['race', 'gender', 'age', 'disease'],
             #"mimic_cxr_target": ['cardiomegaly', 'pleural_effusion',],
+            "quantize_data": [True,],
+            "small_glow": [True],
         }
     )
 
     random_params = dictlistprod(
         {
-            "seed": [0],#,1,2],  # range(0, 3),
+            "seed": range(0, 3),
         }
     )
 
@@ -151,6 +153,8 @@ def run(
     mimic_cxr_clip,
     mimic_cxr_target,
     pretrain_dataset,
+    quantize_data,
+    small_glow,
 ):
     data_path = '/home/schirrmr/data/pytorch-datasets/'
     model_name = "ConvNet"

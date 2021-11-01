@@ -1,7 +1,16 @@
 import torch
 
+
+def quantize_data(x):
+    x_0_255 = x * 255
+    # pass-through grad
+    x = (torch.round(x_0_255).detach() + x_0_255 - x_0_255.detach()) / 255.0
+    return x
+
+
 def to_plus_minus_one(x):
     return (x * 2) - 1
+
 
 def add_glow_noise(x):
     # assume after conversion to glow range ([0,255/256.0])
@@ -17,7 +26,7 @@ def glow_img_to_img_0_1(image):
 
 
 def img_0_1_to_glow_img(img_0_1):
-    image_glow = ((img_0_1 * (255/256.0)) - 0.5)#could add + (1/256*2)? or add at eval?
+    image_glow = ((img_0_1 * (255/256.0)) - 0.5)
     return image_glow
 
 def img_0_1_to_cifar100_standardized(img):
@@ -49,20 +58,26 @@ def cifar10_standardized_to_img_0_1(img):
 
 class ImageConverter(object):
     def __init__(self, image_standardize_before_glow, sigmoid_on_alpha,
-                 standardize_for_clf, glow_noise_on_out):
+                 standardize_for_clf, glow_noise_on_out, quantize_data):
         self.image_standardize_before_glow = image_standardize_before_glow
         self.sigmoid_on_alpha = sigmoid_on_alpha
         self.standardize_for_clf = standardize_for_clf
         self.glow_noise_on_out = glow_noise_on_out
+        self.quantize_data = quantize_data
         if glow_noise_on_out:
+            assert sigmoid_on_alpha
+        if self.quantize_data:
             assert sigmoid_on_alpha
 
 
     def alpha_to_img_orig(self, alphas):
         if self.sigmoid_on_alpha:
             im_orig = torch.sigmoid(alphas)
+            if self.quantize_data:
+                # with grad
+                im_orig = quantize_data(im_orig)
             if self.glow_noise_on_out:
-                im_orig = im_orig + torch.rand_like(im_orig) * 1/255.0
+                im_orig = im_orig + torch.rand_like(im_orig) * 1/255.0 # now onto [0,1+1/255.0=256/255.0], but later undone by to glow conversion
         else:
             if self.standardize_for_clf:
                 im_orig = cifar10_standardized_to_img_0_1(alphas)

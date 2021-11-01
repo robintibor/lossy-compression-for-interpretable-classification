@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/retrain-simplified/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/retrain-simplified/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -42,20 +42,24 @@ def get_grid_param_list():
             "debug": False,
         }
     ]
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/'
+    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/'
     df = load_data_frame(parent_exp_folder)
     df = df[(df.finished == True) & (df.debug == False)]
-    exp_ids = df[df.n_epochs == 100].index
+    df = df[(df.quantize_after_simplifier == True)]
+    exp_ids = df.index
+
+    saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
+                         for exp_id in exp_ids]
 
     exp_params = dictlistprod({
-        'parent_exp_folder': ['/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/'],
-        'exp_id': exp_ids,
+        'saved_exp_folder': saved_exp_folders,
     })
 
     train_params = dictlistprod(
         {
             "n_epochs": [100],
-            "init_pretrained_clf": [False],#[False, True],
+            "init_pretrained_clf": [False,],#[False, True],#True
+            "restandardize_inputs": [True],
         }
     )
 
@@ -100,8 +104,7 @@ def sample_config_params(rng, params):
 
 def run(
     ex,
-    parent_exp_folder,
-    exp_id,
+    saved_exp_folder,
     n_epochs,
     init_pretrained_clf,
     lr_clf,
@@ -111,6 +114,7 @@ def run(
     save_models,
     with_batchnorm,
     noise_on_simplifier,
+    restandardize_inputs,
 ):
     if debug:
         n_epochs = 3
@@ -134,6 +138,14 @@ def run(
     )
     start_time = time.time()
     ex.info["finished"] = False
+
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+
+
     from lossy.experiments.retrain_on_simplified.run import run_exp
 
     results = run_exp(**kwargs)

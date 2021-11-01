@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torchvision.utils import save_image
 
-from lossy.glow import load_normal_glow
+from lossy.glow import load_normal_glow, load_small_glow
 from lossy.invglow.invertible.expression import Expression
 from lossy.augment import TrivialAugmentPerImage
 from lossy.image_convert import (
@@ -281,6 +281,8 @@ def run_exp(
     mimic_cxr_clip,
     mimic_cxr_target,
     pretrain_dataset,
+    quantize_data,
+    small_glow,
 ):
     # outer_loop, inner_loop = get_loops(ipc)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -323,6 +325,7 @@ def run_exp(
         sigmoid_on_alpha=sigmoid_on_alpha,
         standardize_for_clf=standardize_for_clf,
         glow_noise_on_out=glow_noise_on_out,
+        quantize_data=quantize_data,
     )
 
     data_save = []
@@ -332,7 +335,10 @@ def run_exp(
 
     # Load glow
     print("Loading glow...")
-    gen = load_normal_glow()
+    if small_glow:
+        gen = load_small_glow()
+    else:
+        gen = load_normal_glow()
 
     """ organize the real dataset """
 
