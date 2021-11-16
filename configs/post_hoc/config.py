@@ -44,8 +44,12 @@ def get_grid_param_list():
     ]
 
     data_params = dictlistprod({
-        'i_start': range(160,160+160, 32),
-        'images_to_analyze': ['false_pred', 'true_pred']
+        'i_start': range(0,160, 32),
+        'images_to_analyze': ['false_pred', 'true_pred'],
+    })
+
+    model_params = dictlistprod({
+        "saved_model_folder": ["/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/22/"],
     })
 
     train_params = dictlistprod({
@@ -64,6 +68,7 @@ def get_grid_param_list():
             train_params,
             data_params,
             random_params,
+            model_params,
             debug_params,
         ]
     )
@@ -83,6 +88,7 @@ def run(
     n_epochs,
     debug,
     bpd_weight,
+    saved_model_folder,
 ):
     if debug:
         n_epochs = 3
@@ -103,6 +109,15 @@ def run(
     )
     start_time = time.time()
     ex.info["finished"] = False
+
+
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+
+
     from lossy.experiments.post_hoc.run import run_exp
 
     results = run_exp(**kwargs)

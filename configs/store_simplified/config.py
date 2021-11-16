@@ -81,7 +81,15 @@ def run(
     )
     start_time = time.time()
     ex.info["finished"] = False
-    from lossy.experiments.store_simplified.run import run_exp
+
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+
+
+    from configs.store_simplified.run import run_exp
 
     run_exp(**kwargs)
     end_time = time.time()

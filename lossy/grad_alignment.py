@@ -9,6 +9,11 @@ def cos_sim_neg_grads(g_orig, g_simple):
             eps=1e-12)
     return cos_sim
 
+# def cos_sim_grads(g_orig, g_simple):
+#     cos_sim = th.nn.functional.cosine_similarity(
+#         g_orig.flatten(1), g_simple.flatten(1), dim=1,
+#             eps=1e-12)
+#     return cos_sim
 
 def mse_neg_grads(g_orig, g_simple):
     mask = g_orig < 0

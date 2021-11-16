@@ -4,6 +4,8 @@ import random
 import torch
 from warnings import warn
 
+from itertools import zip_longest
+
 def np_to_th(
     X, requires_grad=False, dtype=None, pin_memory=False, **tensor_kwargs
 ):
@@ -88,3 +90,10 @@ def np_to_var(
         **tensor_kwargs
     )
 
+# https://stackoverflow.com/a/32954700/1469195
+def zip_equal(*iterables):
+    sentinel = object()
+    for combo in zip_longest(*iterables, fillvalue=sentinel):
+        if sentinel in combo:
+            raise ValueError('Iterables have different lengths')
+        yield combo

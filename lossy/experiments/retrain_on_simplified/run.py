@@ -18,7 +18,7 @@ from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment
 from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import add_glow_noise_to_0_1, quantize_data
+from lossy.image_convert import add_glow_noise_to_0_1, quantize_data, ContrastNormalize
 from lossy.image_convert import to_plus_minus_one
 from lossy.util import np_to_th, th_to_np
 
@@ -37,8 +37,9 @@ def run_exp(
     debug,
     save_models,
     with_batchnorm,
-    noise_on_simplifier,
     restandardize_inputs,
+    contrast_normalize,
+    add_original_data,
 ):
 
     writer = SummaryWriter(output_dir)
@@ -52,11 +53,12 @@ def run_exp(
     set_random_seeds(np_th_seed, True)
 
     config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
-    noise_augment_level = config["noise_augment_level"]
-    saved_model_folder = config["saved_model_folder"]
+    noise_augment_level = config.get("noise_augment_level", 0)
+    saved_model_folder = config.get("saved_model_folder", None)
     dataset = config["dataset"]
 
-    assert config["noise_after_simplifier"]
+
+    # Ignore for now assert config["noise_after_simplifier"]
     batch_size = config["batch_size"]
     split_test_off_train = False
 
@@ -79,8 +81,8 @@ def run_exp(
         first_n=first_n,
     )
 
-    depth = config.get("depth", 28)
-    widen_factor = config.get("widen_factor", 10)
+    depth = config.get("depth", 16)
+    widen_factor = config.get("widen_factor", 2)
     dropout = 0.3
     activation = "elu"  # was relu in past
     if saved_model_folder is not None:
@@ -117,7 +119,7 @@ def run_exp(
         model.apply(conv_init)
 
     log.info("Create preprocessor...")
-    assert config["residual_preproc"]
+    assert config.get("residual_preproc", True)
     preproc = WrapResidualIdentityUnet(
         nn.Sequential(
             Expression(to_plus_minus_one),
@@ -147,24 +149,28 @@ def run_exp(
     preproc.eval()
 
     log.info("Add normalizer to classifier...")
-    if restandardize_inputs:
-        all_simple_X = []
-        for X, y in train_det_loader:
-            X = X.cuda()
-            with th.no_grad():
-                simple_X = preproc(X)
-                all_simple_X.append(simple_X)
-
-        mean = th.cat(all_simple_X).mean(dim=(0, 2, 3)).detach()
-
-        std = th.cat(all_simple_X).std(dim=(0, 2, 3)).detach()
+    if contrast_normalize:
+        normalize = ContrastNormalize()
     else:
-        mean = np_to_th(wide_nf_net.mean[dataset], device="cpu", dtype=np.float32)
-        std = np_to_th(wide_nf_net.std[dataset], device="cpu", dtype=np.float32)
-    normalize = kornia.augmentation.Normalize(
-        mean=mean,
-        std=std,
-    )
+        if restandardize_inputs:
+            all_simple_X = []
+            for X, y in train_det_loader:
+                X = X.cuda()
+                with th.no_grad():
+                    simple_X = preproc(X)
+                    all_simple_X.append(simple_X)
+
+            mean = th.cat(all_simple_X).mean(dim=(0, 2, 3)).detach()
+
+            std = th.cat(all_simple_X).std(dim=(0, 2, 3)).detach()
+        else:
+            mean = np_to_th(wide_nf_net.mean[dataset], device="cpu", dtype=np.float32)
+            std = np_to_th(wide_nf_net.std[dataset], device="cpu", dtype=np.float32)
+
+        normalize = kornia.augmentation.Normalize(
+            mean=mean,
+            std=std,
+        )
 
     clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
@@ -225,16 +231,22 @@ def run_exp(
 
     # Construct fixed train/test sets
 
-    def get_tensor_loaders(loader, preproc, batch_size):
+    def get_tensor_loaders(loader, preproc, batch_size, add_original_data):
         all_X = []
         all_y = []
+        all_orig_X = []
         for X, y in tqdm(loader):
             X = X.cuda()
             with th.no_grad():
                 simple_X = preproc(X)
             all_X.append(simple_X.cpu())
+            all_orig_X.append(X.cpu())
             all_y.append(y.cpu())
-        tensor_set = th.utils.data.TensorDataset(th.cat(all_X), th.cat(all_y))
+        if add_original_data:
+            tensor_set = th.utils.data.TensorDataset(
+                th.cat(all_X), th.cat(all_orig_X), th.cat(all_y))
+        else:
+            tensor_set = th.utils.data.TensorDataset(th.cat(all_X), th.cat(all_y))
         shuffled_loader = torch.utils.data.DataLoader(
             tensor_set,
             batch_size=batch_size,
@@ -252,21 +264,32 @@ def run_exp(
         return shuffled_loader, det_loader
 
     trainloader_tensors, train_det_loader_tensors = get_tensor_loaders(
-        train_det_loader, preproc, batch_size
+        train_det_loader, preproc, batch_size, add_original_data,
     )
-    _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size)
+    _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size, add_original_data,)
     for i_epoch in trange(n_epochs):
-        for X, y in tqdm(trainloader_tensors):
+        for batch in tqdm(trainloader_tensors):
+            if add_original_data:
+                simple_X, orig_X, y = batch
+                orig_X = orig_X.cuda()
+            else:
+                simple_X, y = batch
+
             clf.train()
-            X = X.cuda()
+            simple_X = simple_X.cuda()
             y = y.cuda()
             with th.no_grad():
-                aug_m = get_aug_m(X.shape, noise_augment_level)
+                aug_m = get_aug_m(simple_X.shape, noise_augment_level)
             # since this is how it was trained before
-            X = add_glow_noise_to_0_1(X)
-            X_aug = aug_m(X)
-            out = clf(X_aug)
+            simple_X = add_glow_noise_to_0_1(simple_X)
+            simple_X_aug = aug_m(simple_X)
+            out = clf(simple_X_aug)
             clf_loss = th.nn.functional.cross_entropy(out, y)
+            if add_original_data:
+                orig_out = clf(orig_X)
+                orig_clf_loss = th.nn.functional.cross_entropy(orig_out, y)
+                clf_loss = (orig_clf_loss + clf_loss) / 2
+
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
             opt_clf.step()
@@ -282,7 +305,11 @@ def run_exp(
             ("test", testloader),
         ):
             eval_df = pd.DataFrame()
-            for X, y in tqdm(loader):
+            for batch in tqdm(loader):
+                if add_original_data and ("preproc" in loader_name):
+                    X, _, y = batch
+                else:
+                    X,y = batch
                 X = X.cuda()
                 y = y.cuda()
                 if "preproc" in loader_name:
@@ -323,11 +350,10 @@ if __name__ == "__main__":
     np_th_seed = 0
     save_models = True
     with_batchnorm = False
-    noise_on_simplifier = True
     weight_decay = 1e-05
     lr_clf = 0.0005
     first_n = None
-    saved_exp_folder =  None  # has to be set to model that was saved from one_step/run.py
+    saved_exp_folder = None  # has to be set to model that was saved from one_step/run.py
     debug = False
 
     output_dir = "."
@@ -343,5 +369,4 @@ if __name__ == "__main__":
         debug,
         save_models,
         with_batchnorm,
-        noise_on_simplifier,
     )

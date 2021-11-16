@@ -1,4 +1,7 @@
 import torch
+from torch import nn
+
+from lossy.util import soft_clip, inverse_sigmoid
 
 
 def quantize_data(x):
@@ -21,6 +24,7 @@ def add_glow_noise_to_0_1(x):
     # later will be multiplied with 255/256.0
     return x + torch.rand_like(x) * 1/255.0
 
+
 def glow_img_to_img_0_1(image):
     return (image + 0.5) * (256/255.0)
 
@@ -28,6 +32,7 @@ def glow_img_to_img_0_1(image):
 def img_0_1_to_glow_img(img_0_1):
     image_glow = ((img_0_1 * (255/256.0)) - 0.5)
     return image_glow
+
 
 def img_0_1_to_cifar100_standardized(img):
     #https://github.com/chenyaofo/image-classification-codebase/blob/c199e524e32f79b2fcc6622734e78b4bcbbb5538/conf/cifar100.conf
@@ -37,6 +42,7 @@ def img_0_1_to_cifar100_standardized(img):
     mean_th = torch.tensor(mean, device='cuda').unsqueeze(0).unsqueeze(2).unsqueeze(3)
     normed = (img - mean_th) / std_th
     return normed
+
 
 def img_0_1_to_cifar10_standardized(img):
     mean = [0.4914, 0.4822, 0.4465]
@@ -68,7 +74,6 @@ class ImageConverter(object):
             assert sigmoid_on_alpha
         if self.quantize_data:
             assert sigmoid_on_alpha
-
 
     def alpha_to_img_orig(self, alphas):
         if self.sigmoid_on_alpha:
@@ -129,3 +134,15 @@ def standardize_per_example(alphas):
     alphas = (alphas - alphas.mean(dim=dims, keepdim=True)) / (
                 alphas.std(dim=dims, keepdim=True))
     return alphas
+
+
+def contrast_normalize(img_0_1, eps=1e-6):
+        img_clipped = soft_clip(img_0_1, eps, 1-eps)
+        alphas = inverse_sigmoid(img_clipped)
+        alphas_standardized = standardize_per_example(alphas)
+        img_normalized = torch.sigmoid(alphas_standardized)
+        return img_normalized
+
+class ContrastNormalize(nn.Module):
+    def forward(self, img_0_1):
+        return contrast_normalize(img_0_1, eps=1e-6)

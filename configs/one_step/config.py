@@ -61,7 +61,7 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['mnist', 'fashionmnist', 'svhn'],
+        'dataset': ['cifar10', 'mnist', 'fashionmnist', 'svhn'],
         #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
     })
@@ -77,26 +77,31 @@ def get_grid_param_list():
 
     noise_params = [{
             "noise_augment_level": 0,
-            "noise_after_simplifier": True,
-            "noise_before_generator": False,
             'trivial_augment': False,
             'extra_augs': False,
         },
     ]
 
-    quantize_params = dictlistprod(
-        {
-            "np_th_seed": range(1),
-            #"np_th_seed": [0],
-            'quantize_after_simplifier': [True,False],
-        }
-    ) + dictlistprod(
-        {
-            "np_th_seed": range(1,3),
-            #"np_th_seed": [0],
-            'quantize_after_simplifier': [True,],
-        }
-    )
+    quantize_params = [{
+        "noise_after_simplifier": False,
+        "noise_before_generator": True,
+        "np_th_seed": 0,
+        'quantize_after_simplifier': True,
+    }]
+
+    # quantize_params = dictlistprod(
+    #     {
+    #         "np_th_seed": range(1),
+    #         #"np_th_seed": [0],
+    #         'quantize_after_simplifier': [True,False],
+    #     }
+    # ) + dictlistprod(
+    #     {
+    #         "np_th_seed": range(1,3),
+    #         #"np_th_seed": [0],
+    #         'quantize_after_simplifier': [True,],
+    #     }
+    # )
 
     random_params = dictlistprod(
         {
@@ -114,10 +119,6 @@ def get_grid_param_list():
             ],
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
-            #114 before
-            # 21 for fashionmnist
-            #"saved_model_folder": ['/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/20/'],
-            #"saved_model_folder": ['/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'],
             'save_models': [True],
         }
     )
@@ -135,8 +136,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],#[0.4], #[0., 0.1, 0.5, 1.0, 2.0],#[0.1, 0.5, 1.0, 2.0],
-            #"bpd_weight": [0.4, 1.6,]
+            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 

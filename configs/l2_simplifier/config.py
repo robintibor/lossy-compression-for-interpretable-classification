@@ -12,7 +12,7 @@ from hyperoptim.parse import (
     cartesian_dict_of_lists_product,
     product_of_list_of_lists_of_dicts,
 )
-from hyperoptim.results import load_data_frame
+
 import torch as th
 import torch.backends.cudnn as cudnn
 
@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/retrain-l2-simplified/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/l2-simplifier/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -42,67 +42,56 @@ def get_grid_param_list():
             "debug": False,
         }
     ]
-    # parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/'
-    # df = load_data_frame(parent_exp_folder)
-    # df = df[(df.finished == True) & (df.debug == False) & (df.np_th_seed == 0)]
-    # df = df[(df.quantize_after_simplifier == True) &
-    #         (df.noise_after_simplifier == True)]
-    # exp_ids = df.index
-    #
-    # saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
-    #                      for exp_id in exp_ids]
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/l2-simplifier//'
-    df = load_data_frame(parent_exp_folder)
-    df = df[df.finished == 1]
-    df = df.fillna('-')
-    df = df[df.debug == 0]
-    df = df[(df.mse_weight == 10) & (df.noise_after_simplifier == True)]
-    exp_ids = df.index
-    saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
-                         for exp_id in exp_ids]
 
-    exp_params = dictlistprod({
-        'saved_exp_folder': saved_exp_folders,
+
+    data_params = dictlistprod({
+        'dataset': ['cifar10', 'mnist', 'fashionmnist', 'svhn'],#'mnist', 'fashionmnist', 'svhn'
     })
 
     train_params = dictlistprod(
         {
-            "n_epochs": [100],
-            "init_pretrained_clf": [False,],#[False, True],#True
-            "restandardize_inputs": [False],
-            "contrast_normalize": [False],
-            "add_original_data": [False],
+            #"n_epochs": [20],
+            "n_epochs": [50],
+            "batch_size": [32],
         }
     )
 
+
+    quantize_params = [{
+        "noise_after_simplifier": True,
+        "noise_before_generator": False,
+        'quantize_after_simplifier': False,
+    }]
+
     random_params = dictlistprod(
         {
-            "np_th_seed": range(1),
+            "np_th_seed": [0],
         }
     )
 
     model_params = dictlistprod(
         {
             'save_models': [True],
-            "with_batchnorm": [False],
         }
     )
     optim_params = dictlistprod(
         {
-            "weight_decay": [1e-5],
-            "lr_clf": [5e-4],#5e-4,
+            "lr_preproc": [5e-4],
+            "bpd_weight": [0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            "mse_weight": [10],
         }
     )
 
     grid_params = product_of_list_of_lists_of_dicts(
         [
             save_params,
-            exp_params,
             train_params,
             random_params,
             debug_params,
             model_params,
             optim_params,
+            data_params,
+            quantize_params,
         ]
     )
 
@@ -115,26 +104,28 @@ def sample_config_params(rng, params):
 
 def run(
     ex,
-    saved_exp_folder,
     n_epochs,
-    init_pretrained_clf,
-    lr_clf,
+    lr_preproc,
+    bpd_weight,
     np_th_seed,
-    weight_decay,
+    batch_size,
+    dataset,
     debug,
     save_models,
-    with_batchnorm,
-    restandardize_inputs,
-    contrast_normalize,
-    add_original_data,
+    noise_before_generator,
+    noise_after_simplifier,
+    quantize_after_simplifier,
+    mse_weight,
 ):
     if debug:
         n_epochs = 3
         first_n = 1024
+        save_models = False
     else:
         first_n = None
     kwargs = locals()
     kwargs.pop("ex")
+    kwargs.pop("debug")
     if not debug:
         log.setLevel("INFO")
     file_obs = ex.observers[0]
@@ -157,8 +148,7 @@ def run(
     os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
     os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
 
-
-    from lossy.experiments.retrain_on_simplified.run import run_exp
+    from lossy.experiments.l2_simplifier.run import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()
