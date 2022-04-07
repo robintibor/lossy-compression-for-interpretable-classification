@@ -28,6 +28,7 @@ from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 from lossy.wide_nf_net import Wide_NFResNet
 from lossy.wide_nf_net import activation_fn, conv_init
 from lossy import wide_nf_net, data_locations
+from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
 
 log = logging.getLogger(__name__)
 
@@ -63,12 +64,14 @@ def run_exp(
     std_aug_magnitude,
     extra_augs,
     quantize_after_simplifier,
+    train_simclr_orig,
+    ssl_loss_factor,
+    train_ssl_orig_simple,
 ):
     assert model_name in ["wide_nf_net", "nf_net"]
     if saved_model_folder is not None:
         assert model_name == "wide_nf_net"
     writer = SummaryWriter(output_dir)
-
     hparams = {k: v for k, v in locals().items() if v is not None}
     writer = SummaryWriter(output_dir)
     writer.add_hparams(hparams, metric_dict={}, name=output_dir)
@@ -83,6 +86,7 @@ def run_exp(
     bias_for_conv = True
 
     log.info("Load data...")
+
     data_path = data_locations.pytorch_data
     (
         channel,
@@ -121,7 +125,6 @@ def run_exp(
             "activation", "relu"
         )  # default was relu
         assert saved_model_config.get("dataset", "cifar10") == dataset
-
     nf_net = Wide_NFResNet(
         depth, widen_factor, dropout, num_classes, activation=activation
     ).cuda()
@@ -141,7 +144,6 @@ def run_exp(
         return (x * 2) - 1
 
     if residual_preproc:
-
         preproc = WrapResidualIdentityUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -385,12 +387,31 @@ def run_exp(
                 simple_X_aug = aug_m(simple_X)
 
             torch.set_rng_state(random_state)
-            out = clf(simple_X_aug)
+            z_simple = clf[1].compute_features(clf[0](simple_X_aug))
+            out = clf[1].linear(z_simple)
             clf_loss = th.nn.functional.cross_entropy(out, y)
             if train_orig:
                 out_orig = clf(X_aug.detach())
                 clf_loss_orig = th.nn.functional.cross_entropy(out_orig, y)
                 clf_loss = (clf_loss + clf_loss_orig) / 2
+
+            if train_simclr_orig:
+                simclr_aug = modified_simclr_pipeline_transform(True)
+                X1_X2 = [simclr_aug(x) for x in X]
+                X1 = th.stack([x1 for x1,x2 in X1_X2]).cuda()
+                X2 = th.stack([x2 for x1,x2 in X1_X2]).cuda()
+                z1 = clf[1].compute_features(clf[0](X1))
+                z2 = clf[1].compute_features(clf[0](X2))
+                simclr_loss = compute_nt_xent_loss(z1, z2)
+                clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
+                        1 + ssl_loss_factor)
+
+            if train_ssl_orig_simple:
+                z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
+                ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
+                clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
+                        1 + ssl_loss_factor)
+
 
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
@@ -403,6 +424,13 @@ def run_exp(
         clf.eval()
         log.info(f"Epoch {i_epoch:d}")
         results = {}
+        if train_simclr_orig:
+            results['simclr_loss'] = simclr_loss.item()
+            writer.add_scalar('simclr_loss', simclr_loss.item(), i_epoch)
+        elif train_ssl_orig_simple:
+            results['ssl_loss'] = ssl_loss.item()
+            writer.add_scalar('ssl_loss', ssl_loss.item(), i_epoch)
+
         with torch.no_grad():
             for with_preproc in [True, False]:
                 for set_name, loader in (

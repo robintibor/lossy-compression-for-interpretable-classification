@@ -165,10 +165,10 @@ class TrivialAugmentPerImage(nn.Module):
 
 
     def forward(self, X):
-        # in case of same_across_batch just
+        # in case of same_across_batch just apply to batch at once
+        # and check final assert, skip everything else
         if self.same_across_batch:
           aug_X = _apply_op(X, self.op_names[0], self.magnitudes[0])
-        # and keep final assert, skip everything else
         else:
             assert len(X) == len(self.op_names) == len(self.magnitudes)
             aug_Xs = []

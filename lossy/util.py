@@ -6,6 +6,7 @@ from warnings import warn
 
 from itertools import zip_longest
 
+
 def np_to_th(
     X, requires_grad=False, dtype=None, pin_memory=False, **tensor_kwargs
 ):
@@ -46,6 +47,7 @@ def th_to_np(var):
     Should work both for CPU and GPU."""
     return var.cpu().data.numpy()
 
+
 def weighted_sum(total_weight, *args):
     weights = list(args)[::2]
     terms = list(args)[1::2]
@@ -80,15 +82,6 @@ def set_random_seeds(seed, cuda):
         torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
 
-
-def np_to_var(
-    X, requires_grad=False, dtype=None, pin_memory=False, **tensor_kwargs
-):
-    warn("np_to_var has been renamed np_to_th, please use np_to_th instead")
-    return np_to_th(
-        X, requires_grad=requires_grad, dtype=dtype, pin_memory=pin_memory,
-        **tensor_kwargs
-    )
 
 # https://stackoverflow.com/a/32954700/1469195
 def zip_equal(*iterables):

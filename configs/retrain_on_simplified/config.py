@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/retrain-l2-simplified/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/retrain-simclr/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -51,15 +51,27 @@ def get_grid_param_list():
     #
     # saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
     #                      for exp_id in exp_ids]
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/l2-simplifier//'
+    # parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/l2-simplifier//'
+    # df = load_data_frame(parent_exp_folder)
+    # df = df[df.finished == 1]
+    # df = df.fillna('-')
+    # df = df[df.debug == 0]
+    # df = df[(df.mse_weight == 10) & (df.noise_after_simplifier == True) &
+    #         (df.bpd_weight > 1.0)]
+    # exp_ids = df.index
+    # saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
+    #      _cl                for exp_id in exp_ids]
+
+    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/'
     df = load_data_frame(parent_exp_folder)
-    df = df[df.finished == 1]
-    df = df.fillna('-')
-    df = df[df.debug == 0]
-    df = df[(df.mse_weight == 10) & (df.noise_after_simplifier == True)]
+    df = df[df.debug == False]
+    df = df[df.finished == True]
     exp_ids = df.index
     saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
                          for exp_id in exp_ids]
+
+    #saved_exp_folders = ['/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/39/']
+
 
     exp_params = dictlistprod({
         'saved_exp_folder': saved_exp_folders,
@@ -94,6 +106,14 @@ def get_grid_param_list():
         }
     )
 
+    blur_and_jpg_params = [{
+        'blur_simplifier': False,
+        'blur_sigma': None,
+        'dataset': None,
+        'jpg_quality': None,
+        'simclr_loss_factor': None,
+    }]
+
     grid_params = product_of_list_of_lists_of_dicts(
         [
             save_params,
@@ -103,6 +123,7 @@ def get_grid_param_list():
             debug_params,
             model_params,
             optim_params,
+            blur_and_jpg_params,
         ]
     )
 
@@ -127,6 +148,11 @@ def run(
     restandardize_inputs,
     contrast_normalize,
     add_original_data,
+    dataset,
+    blur_simplifier,
+    blur_sigma,
+    jpg_quality,
+    simclr_loss_factor,
 ):
     if debug:
         n_epochs = 3

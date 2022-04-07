@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch as th
+
+from jpg import JPGCompress
+from lossy.glow import load_small_glow
 from lossy.modules import Expression
 from lossy.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
@@ -18,11 +21,46 @@ from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment
 from lossy.datasets import get_dataset
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import add_glow_noise_to_0_1, quantize_data, ContrastNormalize
+from lossy.image_convert import add_glow_noise_to_0_1, quantize_data, ContrastNormalize, img_0_1_to_glow_img
 from lossy.image_convert import to_plus_minus_one
 from lossy.util import np_to_th, th_to_np
 
+from kornia.filters import GaussianBlur2d
+from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
+
 log = logging.getLogger(__name__)
+
+def get_preprocessor_from_folder(saved_exp_folder):
+    config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
+    assert config.get("residual_preproc", True)
+    preproc = WrapResidualIdentityUnet(
+        nn.Sequential(
+            Expression(to_plus_minus_one),
+            UnetGenerator(
+                3,
+                3,
+                num_downs=5,
+                final_nonlin=nn.Identity,
+                norm_layer=AffineOnChans,
+                nonlin_down=nn.ELU,
+                nonlin_up=nn.ELU,
+            ),
+        ),
+        final_nonlin=nn.Sigmoid(),
+    ).cuda()
+
+    preproc_post = nn.Sequential()
+    if config['quantize_after_simplifier']:
+        preproc_post.add_module("quantize", Expression(quantize_data))
+    if config['noise_after_simplifier']:
+        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
+    preproc = nn.Sequential(preproc, preproc_post)
+    preproc.load_state_dict(
+        th.load(os.path.join(saved_exp_folder, "preproc_state_dict.th"))
+    )
+
+    preproc.eval()
+    return preproc
 
 
 def run_exp(
@@ -40,6 +78,11 @@ def run_exp(
     restandardize_inputs,
     contrast_normalize,
     add_original_data,
+    dataset,
+    blur_simplifier,
+    blur_sigma,
+    jpg_quality,
+    simclr_loss_factor,
 ):
 
     writer = SummaryWriter(output_dir)
@@ -52,7 +95,18 @@ def run_exp(
 
     set_random_seeds(np_th_seed, True)
 
-    config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
+    if (blur_simplifier) or (jpg_quality is not None):
+        assert dataset is not None
+        config = {
+            'noise_augment_level': 0,
+            'saved_model_folder': None,
+            'dataset': dataset,
+            'batch_size': 32,
+            'depth': 16,
+            'widen_factor': 2,
+        }
+    else:
+        config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
     noise_augment_level = config.get("noise_augment_level", 0)
     saved_model_folder = config.get("saved_model_folder", None)
     dataset = config["dataset"]
@@ -119,34 +173,12 @@ def run_exp(
         model.apply(conv_init)
 
     log.info("Create preprocessor...")
-    assert config.get("residual_preproc", True)
-    preproc = WrapResidualIdentityUnet(
-        nn.Sequential(
-            Expression(to_plus_minus_one),
-            UnetGenerator(
-                3,
-                3,
-                num_downs=5,
-                final_nonlin=nn.Identity,
-                norm_layer=AffineOnChans,
-                nonlin_down=nn.ELU,
-                nonlin_up=nn.ELU,
-            ),
-        ),
-        final_nonlin=nn.Sigmoid(),
-    ).cuda()
-
-    preproc_post = nn.Sequential()
-    if config['quantize_after_simplifier']:
-        preproc_post.add_module("quantize", Expression(quantize_data))
-    if config['noise_after_simplifier']:
-        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
-    preproc = nn.Sequential(preproc, preproc_post)
-    preproc.load_state_dict(
-        th.load(os.path.join(saved_exp_folder, "preproc_state_dict.th"))
-    )
-
-    preproc.eval()
+    if blur_simplifier:
+        preproc = GaussianBlur2d((15, 15), (blur_sigma, blur_sigma))
+    elif jpg_quality is not None:
+        preproc = JPGCompress(int(jpg_quality))
+    else:
+        preproc = get_preprocessor_from_folder(saved_exp_folder)
 
     log.info("Add normalizer to classifier...")
     if contrast_normalize:
@@ -264,12 +296,14 @@ def run_exp(
         return shuffled_loader, det_loader
 
     trainloader_tensors, train_det_loader_tensors = get_tensor_loaders(
-        train_det_loader, preproc, batch_size, add_original_data,
+        train_det_loader, preproc, batch_size,
+        add_original_data=(add_original_data or (simclr_loss_factor is not None)),
     )
-    _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size, add_original_data,)
+    _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size,
+        add_original_data=(add_original_data or (simclr_loss_factor is not None)))
     for i_epoch in trange(n_epochs):
         for batch in tqdm(trainloader_tensors):
-            if add_original_data:
+            if add_original_data or (simclr_loss_factor is not None):
                 simple_X, orig_X, y = batch
                 orig_X = orig_X.cuda()
             else:
@@ -289,12 +323,21 @@ def run_exp(
                 orig_out = clf(orig_X)
                 orig_clf_loss = th.nn.functional.cross_entropy(orig_out, y)
                 clf_loss = (orig_clf_loss + clf_loss) / 2
+            if simclr_loss_factor is not None:
+                simclr_aug = modified_simclr_pipeline_transform(True)
+                X1_X2 = [simclr_aug(x) for x in orig_X]
+                X1 = th.stack([x1 for x1,x2 in X1_X2]).cuda()
+                X2 = th.stack([x2 for x1,x2 in X1_X2]).cuda()
+                z1 = clf[1].compute_features(clf[0](X1))
+                z2 = clf[1].compute_features(clf[0](X2))
+                simclr_loss = compute_nt_xent_loss(z1, z2)
+                clf_loss = (clf_loss + simclr_loss_factor * simclr_loss) / (
+                        1 + simclr_loss_factor)
 
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
-
         clf.eval()
         results = {}
         print(f"Epoch {i_epoch:d}")
@@ -306,7 +349,7 @@ def run_exp(
         ):
             eval_df = pd.DataFrame()
             for batch in tqdm(loader):
-                if add_original_data and ("preproc" in loader_name):
+                if (add_original_data or (simclr_loss_factor is not None)) and ("preproc" in loader_name):
                     X, _, y = batch
                 else:
                     X,y = batch
@@ -341,6 +384,38 @@ def run_exp(
             sys.stdout.flush()
             if save_models and not debug:
                 th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
+    if (blur_simplifier) or (jpg_quality is not None):
+        log.info("Compute BPOs...")
+        log.info("Load generative model...")
+        glow = load_small_glow()
+
+        gen = nn.Sequential()
+        gen.add_module("to_glow_range", Expression(img_0_1_to_glow_img))
+        gen.add_module("glow", glow)
+
+        def get_bpd(gen, X):
+            n_dims = np.prod(X.shape[1:])
+            _, lp = gen(X)
+            bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
+            return bpd
+
+        for loader_name, loader in (
+                ("train_preproc", train_det_loader_tensors),
+                ("test_preproc", testloader_tensors),
+        ):
+            bpds = []
+            for batch in tqdm(loader):
+                if (add_original_data or simclr_loss_factor is not None) and ("preproc" in loader_name):
+                    X, _, y = batch
+                else:
+                    X, y = batch
+                X = X.cuda()
+                y = y.cuda()
+                with th.no_grad():
+                    simple_X =  add_glow_noise_to_0_1(preproc(X))
+                    this_bpds = get_bpd(gen, simple_X)
+                    bpds.append(th_to_np(this_bpds))
+            results[loader_name + '_bpd'] = np.mean(np.concatenate(bpds))
     return results
 
 

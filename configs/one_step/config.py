@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-ssl/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -61,7 +61,7 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['cifar10', 'mnist', 'fashionmnist', 'svhn'],
+        'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
         #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
     })
@@ -72,6 +72,9 @@ def get_grid_param_list():
             "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
+            "train_simclr_orig": [False],
+            "train_ssl_orig_simple": [True],
+            "ssl_loss_factor": [1,2,4],
         }
     )
 
@@ -191,7 +194,10 @@ def run(
     resample_augmentation_for_clf,
     std_aug_magnitude,
     extra_augs,
-    quantize_after_simplifier
+    quantize_after_simplifier,
+    train_simclr_orig,
+    ssl_loss_factor,
+    train_ssl_orig_simple,
 ):
     if debug:
         n_epochs = 3

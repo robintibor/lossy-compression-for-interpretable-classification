@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 def run_exp(
     output_dir, i_start, images_to_analyze, np_th_seed, n_epochs, bpd_weight, debug,
-        saved_model_folder,
+        saved_model_folder, lower_bound, latent_interp,
 ):
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
@@ -59,6 +59,10 @@ def run_exp(
     dataset = "cifar10"
     mean = wide_nf_net.mean[dataset]
     std = wide_nf_net.std[dataset]
+    if i_start == "paper_inds":
+        # fow now try to recreate
+        assert saved_model_folder == '/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/271/'
+        std = wide_nf_net.mean[dataset]
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
         std=np_to_th(std, device="cpu", dtype=np.float32),
@@ -136,12 +140,16 @@ def run_exp(
     print(np.sum(mask))
     batch_size = 32
     # save the indices of the images
+    if i_start != "paper_inds":
+        X_inds = list(range(i_start, i_start + batch_size))
+    else:
+        X_inds = [6,30,23,14,16,68]
     np.save(
         os.path.join(output_dir, "X_inds.npy"),
-        np.flatnonzero(mask)[i_start : i_start + batch_size],
+        np.flatnonzero(mask)[X_inds],
     )
-    X = th.tensor(X_y_pred["X"][mask])[i_start : i_start + batch_size]
-    y = th.tensor(X_y_pred["y"][mask])[i_start : i_start + batch_size]
+    X = th.tensor(X_y_pred["X"][mask])[X_inds]
+    y = th.tensor(X_y_pred["y"][mask])[X_inds]
     X = X.cuda()
     y = y.cuda()
     with th.no_grad():
@@ -179,9 +187,10 @@ def run_exp(
         set_grads_to_none(scaled_clf.parameters())
         scaled_clf.eval()
 
-        lower_bound = 0.8
         upper_bound = 0.95
         scale_factor = (th.rand(1) * (upper_bound - lower_bound) + lower_bound).item()
+        if i_epoch == n_epochs -1: # just for logging
+            scale_factor = upper_bound
         for p_scaled, p_orig in zip(scaled_clf.parameters(), orig_params):
             p_scaled.data[:] = p_orig.clone().data[:] * scale_factor
 
@@ -199,8 +208,12 @@ def run_exp(
         # maybe unnecessary
         set_grads_to_none(z_alpha_X)
         set_grads_to_none(glow.parameters())
-
-        interp = 1 - th.rand(1).item()  # * 0.5
+        if latent_interp:
+            interp = 1 - th.rand(1).item()  # * 0.5
+            if i_epoch == n_epochs -1: # just for logging:
+                interp = 1
+        else:
+            interp = 1
         z_interped = [
             z_simple * interp + z_orig * (1 - interp)
             for z_simple, z_orig in zip(z_alpha_X, z_orig_X)

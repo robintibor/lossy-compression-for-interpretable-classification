@@ -2,11 +2,11 @@ import torch as th
 from torch import nn
 
 
-def cos_sim_neg_grads(g_orig, g_simple):
+def cos_sim_neg_grads(g_orig, g_simple, eps=1e-12):
     mask = g_orig < 0
     cos_sim = th.nn.functional.cosine_similarity(
             (mask * g_orig).flatten(1), (mask * g_simple).flatten(1), dim=1,
-            eps=1e-12)
+            eps=eps)
     return cos_sim
 
 # def cos_sim_grads(g_orig, g_simple):

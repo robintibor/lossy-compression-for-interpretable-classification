@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-paper-inds/",
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -44,17 +44,20 @@ def get_grid_param_list():
     ]
 
     data_params = dictlistprod({
-        'i_start': range(0,160, 32),
-        'images_to_analyze': ['false_pred', 'true_pred'],
+        'i_start':  ["paper_inds"], # range(0,160, 32),
+        'images_to_analyze': ['false_pred',],# 'true_pred'],
     })
 
     model_params = dictlistprod({
-        "saved_model_folder": ["/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/22/"],
+        "saved_model_folder": ['/work/dlclarge2/schirrmr-lossy-compression/exps/one-step-noise-fixed/271/'],
+            #["/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/22/"],
     })
 
     train_params = dictlistprod({
         'n_epochs': [5000],
         "bpd_weight": [1],
+        "lower_bound": [0.8, 0.95],
+        "latent_interp": [True, False],
     })
 
     random_params = dictlistprod(
@@ -89,6 +92,8 @@ def run(
     debug,
     bpd_weight,
     saved_model_folder,
+    lower_bound,
+    latent_interp,
 ):
     if debug:
         n_epochs = 3

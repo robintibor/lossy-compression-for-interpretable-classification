@@ -59,17 +59,16 @@ def create_glow_model(
         LU_decomposed,
         n_chans,
         block_type='conv',
-        use_act_norm=True
-
+        use_act_norm=True,
+        image_size=32,
 ):
-    image_shape = (32, 32, n_chans)
+    image_shape = (image_size, image_size, n_chans)
 
     H, W, C = image_shape
     flows_per_scale = []
     act_norms_per_scale = []
     dists_per_scale = []
     for i in range(L):
-
         C, H, W = C * 4, H // 2, W // 2
 
         splitter = SubsampleSplitter(
@@ -114,32 +113,25 @@ def create_glow_model(
         dists_per_scale.append(Unlabeled(
             NClassIndependentDist(1, C * H * W, optimize_mean_std=False)))
 
-    assert len(flows_per_scale) == 3
 
-    nd_1_o = Node(None, flows_per_scale[0], name='m0-flow-0')
-    nd_1_ab = Node(nd_1_o, ChunkChans(2))
-    nd_1_a = SelectNode(nd_1_ab, 0)
-    nd_1_an = Node(nd_1_a, act_norms_per_scale[0], name='m0-act-0')
-    nd_1_ad = Node(nd_1_an, dists_per_scale[0], name='m0-dist-0')
+    dist_nodes = []
+    nd_cur = None
+    for i in range(L):
+        if i > 0:
+            nd_cur = SelectNode(nd_cur, 1, name=f'm0-in-flow-{i}')
+        nd_cur = Node(nd_cur, flows_per_scale[i], name=f'm0-flow-{i}')
+        if i < (L - 1):
+            nd_cur = Node(nd_cur, ChunkChans(2), name=f'm0-flow-{i}')
+            nd_cur_out = SelectNode(nd_cur, 0)
+        else:
+            # at last scale, there is no further splitting off of dimensions
+            nd_cur_out = nd_cur
+        nd_cur_act = Node(nd_cur_out, act_norms_per_scale[i], name=f'm0-act-{i}')
+        nd_cur_dist = Node(nd_cur_act, dists_per_scale[i], name=f'm0-dist-{i}')
+        dist_nodes.append(nd_cur_dist)
 
-    nd_1_b = SelectNode(nd_1_ab, 1, name='m0-in-flow-1')
-    nd_2_o = Node(nd_1_b, flows_per_scale[1], name='m0-flow-1')
-    nd_2_ab = Node(nd_2_o, ChunkChans(2), )
-
-    nd_2_a = SelectNode(nd_2_ab, 0, )
-    nd_2_an = Node(nd_2_a, act_norms_per_scale[1], name='m0-act-1')
-    nd_2_ad = Node(nd_2_an, dists_per_scale[1], name='m0-dist-1')
-
-    nd_2_b = SelectNode(nd_2_ab, 1, name='m0-in-flow-2')
-    nd_3_o = Node(nd_2_b, flows_per_scale[2], name='m0-flow-2')
-    nd_3_n = Node(nd_3_o, act_norms_per_scale[2], name='m0-act-2')
-    nd_3_d = Node(nd_3_n, dists_per_scale[2], name='m0-dist-2')
-
-    model = CatAsListNode([nd_1_ad, nd_2_ad, nd_3_d],
-                          name='m0-full')  # cahnged to pre-full
+    model = CatAsListNode(dist_nodes, name='m0-full')
     return model
-
-
 
 
 class Conv2dZeros(nn.Module):
