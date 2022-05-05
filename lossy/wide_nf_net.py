@@ -35,7 +35,6 @@ def conv_init(m):
         init.xavier_uniform_(m.weight, gain=np.sqrt(2))
         init.constant_(m.bias, 0)
 
-
 def learning_rate(init, epoch):
     optim_factor = 0
     if epoch > 160:

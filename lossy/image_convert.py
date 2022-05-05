@@ -129,10 +129,10 @@ class ImageConverter(object):
         return glow_img_to_img_0_1(img_glow)
 
 
-def standardize_per_example(alphas):
+def standardize_per_example(alphas, eps=0):
     dims = tuple(range(1,len(alphas.shape)))
     alphas = (alphas - alphas.mean(dim=dims, keepdim=True)) / (
-                alphas.std(dim=dims, keepdim=True))
+                alphas.std(dim=dims, keepdim=True).clamp_min(eps))
     return alphas
 
 

@@ -1,9 +1,103 @@
-def get_all_activations(net, X,):
+from copy import copy
+import torch as th
+import numpy as np
+from einops import rearrange
+from backpack.utils.subsampling import subsample
+from functools import partial
+
+
+def f_act(act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param):
+    return act_x, act_ref
+
+
+def f_gradact(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return gradact_x, gradact_ref
+
+
+def f_gradact_act(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return act_x * gradact_x, act_ref * gradact_ref
+
+
+def f_gradact_act_relued(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    mask = (act_ref * gradact_ref) > 0
+    return mask * act_x * gradact_x, mask * act_ref * gradact_ref
+
+
+def f_gradact_act_relued_clipped(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    mask = (act_ref * gradact_ref) > 0
+    ref_vals = mask * act_ref * gradact_ref
+    x_vals = mask * act_x * gradact_x
+    x_vals = x_vals.minimum(ref_vals)
+    return x_vals, ref_vals
+
+
+def f_gradact_ref_act_relued(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return f_gradact_act_relued(
+        act_x, gradact_ref, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+    )
+
+
+def f_gradact_ref_act_relued_clipped(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return f_gradact_act_relued_clipped(
+        act_x, gradact_ref, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+    )
+
+
+def f_gradparam(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return gradparam_x, gradparam_ref
+
+
+def f_gradparam_param(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    return gradparam_x * param, gradparam_ref * param
+
+
+def f_gradparam_param_relued(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    mask = (gradparam_ref * param) > 0
+    return mask * gradparam_x * param, mask * gradparam_ref * param
+
+
+def f_gradparam_param_relued_clipped(
+    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
+):
+    mask = (gradparam_ref * param) > 0
+    ref_vals = mask * gradparam_ref * param
+    x_vals = mask * gradparam_x * param
+    x_vals = x_vals.minimum(ref_vals)
+    return x_vals, ref_vals
+
+
+def get_all_activations(
+    net,
+    X,
+    wanted_modules=None,
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
     activations = []
+
     def append_activations(module, input, output):
         activations.append(output)
+
     handles = []
-    for module in net.modules():
+    for module in wanted_modules:
         handle = module.register_forward_hook(append_activations)
         handles.append(handle)
     try:
@@ -14,12 +108,40 @@ def get_all_activations(net, X,):
     return activations
 
 
-def get_activations_per_module(net, X,):
-    activations = {m: {} for m in net.modules()}
+def get_in_activations_per_module(
+    net,
+    X,
+    wanted_modules=None,
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+    activations = {m: {} for m in wanted_modules}
+
+    def append_activations(module, input, output):
+        activations[module] = input
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+    try:
+        _ = net(X)
+    finally:
+        for h in handles:
+            h.remove()
+    return activations
+
+
+def get_activations_per_module(net, X, wanted_modules=None):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+    activations = {m: {} for m in wanted_modules}
+
     def append_activations(module, input, output):
         activations[module] = output
+
     handles = []
-    for module in net.modules():
+    for module in wanted_modules:
         handle = module.register_forward_hook(append_activations)
         handles.append(handle)
     try:
@@ -28,3 +150,629 @@ def get_activations_per_module(net, X,):
         for h in handles:
             h.remove()
     return activations
+
+
+def get_all_activations_and_grads(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+    activations = []
+    grads = []
+
+    def append_activations(module, input, output):
+        activations.append(output)
+
+    def append_grads(module, grad_input, grad_output):
+        grads.insert(0, grad_output)
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+        handle = module.register_full_backward_hook(append_grads)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return activations, grads
+
+
+def get_in_out_activations_and_grads(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+    in_activations = []
+    out_activations = []
+    grads = []
+
+    def append_activations(module, input, output):
+        in_activations.append(input)
+        out_activations.append(output)
+
+    def append_grads(module, grad_input, grad_output):
+        grads.insert(0, grad_output)
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+        handle = module.register_full_backward_hook(append_grads)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return in_activations, out_activations, grads
+
+
+def get_in_out_acts_and_grads_per_module(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    module_to_vals = {m: {} for m in wanted_modules}
+
+    def append_activations(module, input, output):
+        # if "in_act" in module_to_vals[module]:
+        #    return
+        assert "in_act" not in module_to_vals[module]
+        module_to_vals[module]["in_act"] = input
+        assert "out_act" not in module_to_vals[module]
+        module_to_vals[module]["out_act"] = output
+
+    def append_grads(module, grad_input, grad_output):
+        # see https://github.com/pytorch/pytorch/issues/25723 for why this func may be called twice
+        if module not in module_to_vals:
+            return
+        if "out_grad" in module_to_vals[module]:
+            return
+        assert "out_grad" not in module_to_vals[module], f"{module}"
+        module_to_vals[module]["out_grad"] = grad_output
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+        handle = module.register_full_backward_hook(append_grads)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return module_to_vals
+
+def get_in_out_acts_and_in_out_grads_per_module_2(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    module_to_vals = {m: {} for m in wanted_modules}
+
+    handles = []
+
+    def append_grads(module, grad_input, grad_output):
+        if grad_output is not None:
+            assert "out_grad" not in module_to_vals[module], f"{module}"
+            module_to_vals[module]["out_grad"] = (grad_output,)  # before code expected this
+        else:
+            assert grad_input is not None
+            module_to_vals[module]["in_grad"] = (grad_input,)  # before code expected this
+
+
+    def append_activations(module, input, output):
+        assert "in_act" not in module_to_vals[module]
+        module_to_vals[module]["in_act"] = input
+        assert "out_act" not in module_to_vals[module]
+        module_to_vals[module]["out_act"] = output
+        # see https://github.com/pytorch/pytorch/issues/25723 for why like this
+        handle = output.register_hook(
+            partial(
+                append_grads,
+                module,
+                None,
+            )
+        )
+        handles.append(handle)
+        assert len(input) == 1
+        for a_input in input:
+            # see https://github.com/pytorch/pytorch/issues/25723 for why like this
+            handle = a_input.register_hook(
+                partial(
+                    append_grads,
+                    module,
+                    grad_output=None,
+                )
+            )
+            handles.append(handle)
+
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return module_to_vals
+
+
+def get_in_out_acts_and_grads_per_module_2(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    module_to_vals = {m: {} for m in wanted_modules}
+
+    handles = []
+
+    def append_grads(module, grad_input, grad_output):
+        assert "out_grad" not in module_to_vals[module], f"{module}"
+        module_to_vals[module]["out_grad"] = (grad_output,)  # before code expected this
+
+    def append_activations(module, input, output):
+        assert "in_act" not in module_to_vals[module]
+        module_to_vals[module]["in_act"] = input
+        assert "out_act" not in module_to_vals[module]
+        module_to_vals[module]["out_act"] = output
+        # see https://github.com/pytorch/pytorch/issues/25723 for why like this
+        handle = output.register_hook(
+            partial(
+                append_grads,
+                module,
+                None,
+            )
+        )
+        handles.append(handle)
+
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return module_to_vals
+
+
+def get_in_out_acts_and_in_out_grads_per_module(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    module_to_vals = {m: {} for m in wanted_modules}
+
+    def append_activations(module, input, output):
+        assert "in_act" not in module_to_vals[module]
+        module_to_vals[module]["in_act"] = input
+        assert "out_act" not in module_to_vals[module]
+        module_to_vals[module]["out_act"] = output
+
+    def append_grads(module, grad_input, grad_output):
+        assert "in_grad" not in module_to_vals[module], f"{module}"
+        module_to_vals[module]["in_grad"] = grad_input
+        assert "out_grad" not in module_to_vals[module], f"{module}"
+        module_to_vals[module]["out_grad"] = grad_output
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+        handle = module.register_full_backward_hook(append_grads)
+        handles.append(handle)
+    try:
+        output = net(X)
+        loss = loss_fn(output)
+        loss.backward(**backward_kwargs)
+    finally:
+        for h in handles:
+            h.remove()
+    return module_to_vals
+
+
+def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kwargs):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    module_to_vals = {m: {} for m in wanted_modules}
+
+    def append_activations(module, input, output):
+        assert "in_act" not in module_to_vals[module]
+        module_to_vals[module]["in_act"] = input
+        assert "out_act" not in module_to_vals[module]
+        module_to_vals[module]["out_act"] = output
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+    try:
+        _ = net(X)
+    finally:
+        for h in handles:
+            h.remove()
+    return module_to_vals
+
+
+def clip_min_max_signed(a, b):
+    mask = b >= 0
+    c = mask * th.minimum(a, b) + (~mask) * th.maximum(a, b)
+    return c
+
+
+def conv_batch_grad(module, in_act, out_grad):
+    assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
+    # recreated_weight_batch_grad = th.nn.functional.conv2d(
+    #     in_act.view(-1, 1, *in_act.shape[2:]),
+    #     out_grad.view(-1, 1, *out_grad.shape[2:]),
+    #     padding=module.padding,
+    #     dilation=module.stride,
+    # )
+    # reshaped_weight_batch_grad = recreated_weight_batch_grad.reshape(
+    #     len(in_act), in_act.shape[1], *recreated_weight_batch_grad.shape[1:]
+    # ).transpose(1, 2)
+    # # may be stride meant last kernel filter did not fit inside input
+    # # then have to remove appropriately
+    # reshaped_weight_batch_grad = reshaped_weight_batch_grad[
+    #     :, :, :, : module.weight.shape[2], : module.weight.shape[3]
+    # ]
+    # # n_out_before_stride = np.array(in_act.shape[2:]) - (
+    # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
+    # # n_removed_by_stride =
+    weight_grad = conv_weight_grad_loop(
+        module, in_act, out_grad
+    )  # conv_weight_grad_backpack(module, in_act, out_grad)
+
+    bias_batch_grad = out_grad.sum(dim=(-2, -1))
+    return weight_grad, bias_batch_grad
+
+
+def conv_weight_grad_backpack(module, in_act, out_grad):
+    mat = out_grad.unsqueeze(0)
+    G = module.groups
+    V = mat.shape[0]
+    C_out = out_grad.shape[1]
+    N = out_grad.shape[0]
+    C_in = in_act.shape[1]
+    C_in_axis = 1
+    N_axis = 0
+    sum_batch = False
+    dims = "x y"
+    conv_dims = 2
+
+    # treat channel groups like vectorization (v) and batch (n) axes
+    mat = rearrange(mat, "v n (g c) ... -> (v n g) c ...", g=G, c=C_out // G)
+
+    repeat_pattern = [1, C_in // G] + [1 for _ in range(conv_dims)]
+    mat = mat.repeat(*repeat_pattern)
+    mat = rearrange(mat, "a b ... -> (a b) ...")
+    mat = mat.unsqueeze(C_in_axis)
+
+    input = rearrange(subsample(in_act, subsampling=None), "n c ... -> (n c) ...")
+    input = input.unsqueeze(N_axis)
+    repeat_pattern = [1, V] + [1 for _ in range(conv_dims)]
+    input = input.repeat(*repeat_pattern)
+
+    grad_weight = th.nn.functional.conv2d(
+        input,
+        mat,
+        bias=None,
+        stride=module.dilation,
+        padding=module.padding,
+        dilation=module.stride,
+        groups=C_in * N * V,
+    ).squeeze(0)
+
+    for dim in range(conv_dims):
+        axis = dim + 1
+        size = module.weight.shape[2 + dim]
+        grad_weight = grad_weight.narrow(axis, 0, size)
+
+    dim = {"g": G, "v": V, "n": N, "i": C_in // G, "o": C_out // G}
+    if sum_batch:
+        grad_weight = reduce(
+            grad_weight, "(v n g i o) ... -> v (g o) i ...", "sum", **dim
+        )
+    else:
+        grad_weight = rearrange(
+            grad_weight, "(v n g i o) ... -> v n (g o) i ...", **dim
+        )
+    return grad_weight.squeeze(0)
+
+
+def conv_weight_grad_loop(module, in_act, out_grad):
+    grads = []
+    for i_ex in range(len(in_act)):
+        grad = conv_weight_grad(
+            module, in_act[i_ex : i_ex + 1], out_grad[i_ex : i_ex + 1]
+        )
+        grads.append(grad)
+    return th.stack(grads)
+
+
+def conv_weight_grad(module, in_act, out_grad):
+    recreated_weight_grad = th.nn.functional.conv2d(
+        in_act.transpose(0, 1),
+        out_grad.transpose(0, 1),
+        padding=module.padding,
+        dilation=module.stride,
+    )
+    reshaped_weight_grad = recreated_weight_grad.transpose(0, 1)
+    # may be stride meant last kernel filter did not fit inside input
+    # then have to remove appropriately
+    reshaped_weight_grad = reshaped_weight_grad[
+        :, :, : module.weight.shape[2], : module.weight.shape[3]
+    ]
+    return reshaped_weight_grad
+
+
+def linear_batch_grad(module, in_act, out_grad):
+    weight_batch_grad = in_act.unsqueeze(1) * out_grad.unsqueeze(2)
+    bias_batch_grad = out_grad
+    return weight_batch_grad, bias_batch_grad
+
+
+def bnorm_batch_grad(module, in_act, out_grad):
+    bn = module
+    assert not bn.training
+    unnormed_in = in_act
+    n_examples = unnormed_in.shape[0]
+    n_chans = unnormed_in.shape[1]
+    demeaned_in = unnormed_in - bn.running_mean.view(1, n_chans, 1, 1)
+    # th.mean(unnormed_in, dim=(0,-2,-1), keepdim=True)
+    normed_in = demeaned_in / (bn.running_var.sqrt().view(1, n_chans, 1, 1) + bn.eps)
+    # (th.std(demeaned_in, dim=(0,-2,-1), keepdim=True) +  bn.eps)
+    weight_batch_grad = th.sum(normed_in * out_grad, dim=(-2, -1))
+    bias_batch_grad = out_grad.sum(dim=(-2, -1))
+    return weight_batch_grad, bias_batch_grad
+
+
+def grad_act(m, x_m_vals, ref_m_vals):
+    return [(x_m_vals["out_grad"][0], ref_m_vals["out_grad"][0])]
+
+
+def grad_act_act(m, x_m_vals, ref_m_vals):
+    return [
+        (
+            x_m_vals["out_act"] * x_m_vals["out_grad"][0],
+            ref_m_vals["out_act"] * ref_m_vals["out_grad"][0],
+        )
+    ]
+
+
+def grad_act_relued(m, x_m_vals, ref_m_vals):
+    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
+    return [
+        (
+            mask * x_m_vals["out_grad"][0],
+            mask * ref_m_vals["out_grad"][0],
+        )
+    ]
+
+
+def gradact_act_relued(m, x_m_vals, ref_m_vals):
+    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
+    return [
+        (
+            mask * x_m_vals["out_act"] * x_m_vals["out_grad"][0],
+            mask * ref_m_vals["out_act"] * ref_m_vals["out_grad"][0],
+        )
+    ]
+
+
+def gradinact_act_relued(m, x_m_vals, ref_m_vals):
+    mask = (ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0]) > 0
+    return [
+        (
+            mask * x_m_vals["in_act"][0] * x_m_vals["in_grad"][0],
+            mask * ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0],
+        )
+    ]
+
+
+def gradact_ref_act(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return grad_act_act(m, x_m_vals, ref_m_vals)
+
+
+def gradact_act_relued_clipped(m, x_m_vals, ref_m_vals):
+    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
+    ref_vals = mask * ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]
+    x_vals = mask * x_m_vals["out_act"] * x_m_vals["out_grad"][0]
+    x_vals = x_vals.minimum(ref_vals)
+    return [(x_vals, ref_vals)]
+
+
+def gradact_ref_act_relued(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradact_act_relued(m, x_m_vals, ref_m_vals)
+
+
+def gradact_ref_act_relued_clipped(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradact_act_relued_clipped(m, x_m_vals, ref_m_vals)
+
+
+def gradparam_per_batch(m, vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    grad_fn = {
+        "BatchNorm2d": bnorm_batch_grad,
+        "Conv2d": conv_batch_grad,
+        "Linear": linear_batch_grad,
+    }[m.__class__.__name__]
+
+    weight_batch_grad, bias_batch_grad = grad_fn(
+        m, vals["in_act"][0], vals["out_grad"][0]
+    )
+    grads = {}
+    if m.weight is not None:
+        grads["weight"] = weight_batch_grad
+    if m.bias is not None:
+        grads["bias"] = bias_batch_grad
+    return grads
+
+
+def gradparam(m, x_m_vals, ref_m_vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    x_grads = gradparam_per_batch(m, x_m_vals)
+    ref_grads = gradparam_per_batch(m, ref_m_vals)
+    grad_tuples = [(x_grads[key], ref_grads[key]) for key in x_grads]
+    return grad_tuples
+
+
+def gradparam_relued(m, x_m_vals, ref_m_vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    x_grads = gradparam_per_batch(m, x_m_vals)
+    ref_grads = gradparam_per_batch(m, ref_m_vals)
+
+    grad_tuples = []
+    for key in x_grads:
+        param = getattr(m, key).unsqueeze(0)
+        mask = (ref_grads[key] * param) > 0
+        x_val = mask * x_grads[key]
+        ref_val = mask * ref_grads[key]
+        grad_tuples.append((x_val, ref_val))
+
+    return grad_tuples
+
+
+def gradparam_param(m, x_m_vals, ref_m_vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    x_grads = gradparam_per_batch(m, x_m_vals)
+    ref_grads = gradparam_per_batch(m, ref_m_vals)
+
+    grad_tuples = [
+        (
+            x_grads[key] * getattr(m, key).unsqueeze(0),
+            ref_grads[key] * getattr(m, key).unsqueeze(0),
+        )
+        for key in x_grads
+    ]
+    return grad_tuples
+
+
+def gradparam_param_relued(m, x_m_vals, ref_m_vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    x_grads = gradparam_per_batch(m, x_m_vals)
+    ref_grads = gradparam_per_batch(m, ref_m_vals)
+
+    grad_tuples = []
+    for key in x_grads:
+        param = getattr(m, key).unsqueeze(0)
+        mask = (ref_grads[key] * param) > 0
+        x_val = mask * x_grads[key] * param
+        ref_val = mask * ref_grads[key] * param
+        grad_tuples.append((x_val, ref_val))
+
+    return grad_tuples
+
+
+def gradparam_param_relued_clipped(m, x_m_vals, ref_m_vals):
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    x_grads = gradparam_per_batch(m, x_m_vals)
+    ref_grads = gradparam_per_batch(m, ref_m_vals)
+
+    grad_tuples = []
+    for key in x_grads:
+        param = getattr(m, key).unsqueeze(0)
+        mask = (ref_grads[key] * param) > 0
+        x_val = mask * x_grads[key] * param
+        ref_val = mask * ref_grads[key] * param
+        x_val = x_val.minimum(ref_val)
+        grad_tuples.append((x_val, ref_val))
+
+    return grad_tuples
+
+
+def relu_match(val_func):
+    def relued_val_func(m, x_m_vals, ref_m_vals):
+        x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
+        x_and_ref_vals = [
+            (x_val, th.nn.functional.relu(ref_val))
+            for x_val, ref_val in x_and_ref_vals
+        ]
+        return x_and_ref_vals
+    return relued_val_func
+
+
+def gradparam_ref(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradparam(m, x_m_vals, ref_m_vals)
+
+
+def gradparam_ref_relued(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradparam_relued(m, x_m_vals, ref_m_vals)
+
+
+def gradparam_ref_param(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradparam_param(m, x_m_vals, ref_m_vals)
+
+
+def gradparam_ref_param_relued(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradparam_param_relued(m, x_m_vals, ref_m_vals)
+
+
+def gradparam_ref_param_relued_clipped(m, x_m_vals, ref_m_vals):
+    x_m_vals = copy(x_m_vals)
+    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
+    return gradparam_param_relued_clipped(m, x_m_vals, ref_m_vals)
+
+def gradparam_param_unfolded(m, x_m_vals, ref_m_vals):
+    if m.__class__.__name__ == "Conv2d":
+        x_grad_ws = unfolded_w_grad_w(m, x_m_vals['in_act'][0], x_m_vals['out_grad'][0])
+        with th.no_grad():
+            ref_grad_ws = unfolded_w_grad_w(m, ref_m_vals['in_act'][0], ref_m_vals['out_grad'][0])
+        return x_grad_ws, ref_grad_ws
+    else:
+        return gradparam_param(m, x_m_vals, ref_m_vals)
+
+def unfolded_w_grad_w(
+    m,
+    in_act,
+    out_grad,
+):
+    all_grad_ws = []
+    padded_in = th.nn.functional.pad(in_act, m.padding * 2)
+    for i_h in range(m.weight.shape[2]):
+        for i_w in range(m.weight.shape[3]):
+            part_in = padded_in[
+                :,
+                :,
+                i_h : i_h + m.stride[0] * out_grad.shape[2] : m.stride[0],
+                i_w : i_w + m.stride[1] * out_grad.shape[2] : m.stride[1],
+            ]
+            out = part_in.unsqueeze(1) * out_grad.unsqueeze(2)
+            out = out * m.weight.unsqueeze(0)[:, :, :, i_h : i_h + 1, i_w : i_w + 1]
+            all_grad_ws.append(out)
+    all_grad_ws = th.stack(all_grad_ws, dim=1)
+    return all_grad_ws

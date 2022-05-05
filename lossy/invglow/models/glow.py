@@ -1,20 +1,20 @@
 from torch import nn
 import torch as th
 
-from invglow.invertible.actnorm import ActNorm
-from invglow.invertible.affine import AffineCoefs, AffineModifier, AdditiveCoefs
-from invglow.invertible.branching import ChunkChans, ChunkByIndices
-from invglow.invertible.coupling import CouplingLayer
-from invglow.invertible.distribution import Unlabeled, NClassIndependentDist
-from invglow.invertible.graph import CatChansNode
-from invglow.invertible.graph import Node, SelectNode, CatAsListNode
-from invglow.invertible.graph import get_nodes_by_names
-from invglow.invertible.identity import Identity
-from invglow.invertible.inv_permute import InvPermute, Shuffle
-from invglow.invertible.sequential import InvertibleSequential
-from invglow.invertible.split_merge import ChunkChansIn2, EverySecondChan
-from invglow.invertible.splitter import SubsampleSplitter
-from invglow.invertible.view_as import Flatten2d, ViewAs
+from ..invertible.actnorm import ActNorm
+from ..invertible.affine import AffineCoefs, AffineModifier, AdditiveCoefs
+from ..invertible.branching import ChunkChans, ChunkByIndices
+from ..invertible.coupling import CouplingLayer
+from ..invertible.distribution import Unlabeled, NClassIndependentDist
+from ..invertible.graph import CatChansNode
+from ..invertible.graph import Node, SelectNode, CatAsListNode
+from ..invertible.graph import get_nodes_by_names
+from ..invertible.identity import Identity
+from ..invertible.inv_permute import InvPermute, Shuffle
+from ..invertible.sequential import InvertibleSequential
+from ..invertible.split_merge import ChunkChansIn2, EverySecondChan
+from ..invertible.splitter import SubsampleSplitter
+from ..invertible.view_as import Flatten2d, ViewAs
 
 
 def convert_glow_to_pre_dist_model(model):

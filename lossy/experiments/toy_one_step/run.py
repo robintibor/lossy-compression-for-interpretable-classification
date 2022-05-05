@@ -15,7 +15,7 @@ from torchvision.utils import save_image
 import higher
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
-from lossy.datasets import get_dataset
+from lossy.datasets import linear_interpolate_a_b
 from lossy.glow import load_small_glow
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import img_0_1_to_glow_img, quantize_data
@@ -23,18 +23,31 @@ from lossy.util import weighted_sum
 from lossy.optim import grads_all_finite
 from lossy.util import np_to_th, th_to_np
 from lossy.wide_nf_net import activation_fn
+from lossy.plot import rescale, create_rgb_image, stack_images_in_rows
 import logging
 import json
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 
 from lossy import wide_nf_net, data_locations
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
+from copy import deepcopy
+
 
 log = logging.getLogger(__name__)
 
-def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_model_folder,
-                      depth, widen_factor, lr_clf, weight_decay):
-    if model_name in ['wide_nf_net', 'wide_bnorm_net']:
+
+def get_clf_and_optim(
+    model_name,
+    num_classes,
+    normalize,
+    optim_type,
+    saved_model_folder,
+    depth,
+    widen_factor,
+    lr_clf,
+    weight_decay,
+):
+    if model_name in ["wide_nf_net", "wide_bnorm_net"]:
 
         dropout = 0.3
         activation = "elu"  # was relu in past
@@ -49,16 +62,18 @@ def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_mode
                 "activation", "relu"
             )  # default was relu
             assert saved_model_config.get("dataset", "cifar10") == dataset
-        if model_name == 'wide_nf_net':
+        if model_name == "wide_nf_net":
             from lossy.wide_nf_net import conv_init, Wide_NFResNet
+
             nf_net = Wide_NFResNet(
                 depth, widen_factor, dropout, num_classes, activation=activation
             ).cuda()
             nf_net.apply(conv_init)
             model = nf_net
-        elif model_name == 'wide_bnorm_net':
+        elif model_name == "wide_bnorm_net":
             activation = "relu"  # overwrite for wide resnet for now
             from lossy.wide_resnet import Wide_ResNet, conv_init
+
             model = Wide_ResNet(
                 depth, widen_factor, dropout, num_classes, activation=activation
             ).cuda()
@@ -70,12 +85,12 @@ def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_mode
                 os.path.join(saved_model_folder, "nf_net_state_dict.th")
             )
             model.load_state_dict(saved_clf_state_dict)
-    elif model_name == 'resnet18':
+    elif model_name == "resnet18":
         from lossy.resnet import resnet18
+
         model = resnet18(num_classes=num_classes)
     else:
         assert False
-
 
     clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
@@ -154,6 +169,183 @@ def adjust_betas_of_clf(clf, trainloader, get_aug_m):
             module.scalar.data[:] = 0
 
 
+# maybe can be imported from lossy.datasets instead? version is slightly different
+# this oen seems mroe complete and newer
+# However this somehow always matched exact same indices hmmhm
+class MixedSet(th.utils.data.Dataset):
+    def __init__(self, set_a, set_b, merge_function_x, merge_function_y):
+        self.set_a = set_a
+        self.set_b = set_b
+        self.merge_function_x = merge_function_x
+        self.merge_function_y = merge_function_y
+
+    def __getitem__(self, index):
+        x_a, y_a = self.set_a[index]
+        x_b, y_b = self.set_b[index]
+
+        x = self.merge_function_x(x_a, x_b)
+        y = self.merge_function_y(y_a, y_b)
+        return x, y
+
+    def __len__(self):
+        return min(len(self.set_a), len(self.set_b))
+
+
+class StripesSet(th.utils.data.Dataset):
+    def __init__(self, orig_set, label_from):
+        self.orig_set = orig_set
+        self.sin_vals = np.sin(np.linspace(0, 11 * np.pi, 32))
+        self.sin_vals = self.sin_vals * 0.5 + 0.5
+        # make proper range
+        self.label_from = label_from
+
+    def __getitem__(self, index):
+        x_orig, y_orig = self.orig_set[index]
+        horizontal = th.rand(1).item() > 0.5
+        if horizontal:
+            x_orig.data[:, :, :] = (
+                x_orig.data[:, :, :] * 0.85
+                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, 32, 1) * 0.15
+            ).data[:]
+        else:
+
+            x_orig.data[:, :, :] = (
+                x_orig.data[:, :, :] * 0.85
+                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, 1, 32) * 0.15
+            ).data[:]
+        if self.label_from == "stripes":
+            y = int(horizontal)
+        elif self.label_from == "orig_set":
+            y = y_orig
+        return x_orig, y
+
+    def __len__(self):
+        return len(self.orig_set)
+
+
+def load_dataset(
+    dataset_name,
+    data_path,
+    reverse,
+    first_n,
+    split_test_off_train,
+    batch_size,
+):
+    assert dataset_name in [
+        "mnist_fashion",
+        "stripes",
+        "mnist_cifar",
+    ]
+
+    from lossy.datasets import get_train_test_datasets
+
+    log.info("Load data...")
+    if dataset_name == "mnist_fashion":
+        num_classes = 10
+        train_mnist, test_mnist = get_train_test_datasets(
+            "MNIST", data_path, standardize=False
+        )
+        train_fashion, test_fashion = get_train_test_datasets(
+            "FashionMNIST", data_path, standardize=False
+        )
+
+        def merge_x_fn(x_a, x_b):
+            if th.rand(1).item() > 0.5:
+                x = th.cat((x_a, x_b), dim=2)
+            else:
+                x = th.cat((x_b, x_a), dim=2)
+
+            x = kornia.resize(x, x_a.size()[1:], align_corners=False)
+            return x
+
+        def merge_y_fn(y_a, y_b):
+            return y_a
+
+        if not reverse:
+            dst_train = MixedSet(train_mnist, train_fashion, merge_x_fn, merge_y_fn)
+            dst_test = MixedSet(test_mnist, test_fashion, merge_x_fn, merge_y_fn)
+        else:
+            dst_train = MixedSet(train_fashion, train_mnist, merge_x_fn, merge_y_fn)
+            dst_test = MixedSet(test_fashion, test_mnist, merge_x_fn, merge_y_fn)
+    elif dataset_name == "stripes":
+
+        train_cifar, test_cifar = get_train_test_datasets(
+            "CIFAR10", data_path, standardize=False
+        )
+        label_from = ["stripes", "orig_set"][reverse]
+        num_classes = [2, 10][reverse]
+        dst_train = StripesSet(train_cifar, label_from=label_from)
+        dst_test = StripesSet(test_cifar, label_from=label_from)
+    elif dataset_name == "mnist_cifar":
+        num_classes = 10
+        from lossy.datasets import MixedDataset
+        import functools
+
+        train_mnist, test_mnist = get_train_test_datasets(
+            "MNIST", data_path, standardize=False
+        )
+        train_cifar, test_cifar = get_train_test_datasets(
+            "CIFAR10", data_path, standardize=False
+        )
+        if not reverse:
+            dst_train = MixedDataset(
+                train_mnist,
+                train_cifar,
+                functools.partial(linear_interpolate_a_b, weight_a=0.5),
+            )
+            dst_test = MixedDataset(
+                test_mnist,
+                test_cifar,
+                functools.partial(linear_interpolate_a_b, weight_a=0.5),
+            )
+        else:
+            dst_train = MixedDataset(
+                train_cifar,
+                train_mnist,
+                functools.partial(linear_interpolate_a_b, weight_a=0.5),
+            )
+            dst_test = MixedDataset(
+                test_cifar,
+                test_mnist,
+                functools.partial(linear_interpolate_a_b, weight_a=0.5),
+            )
+    else:
+        assert False
+
+    if first_n is not None:
+        dst_train = torch.utils.data.Subset(dst_train, np.arange(0, first_n))
+        dst_test = torch.utils.data.Subset(dst_test, np.arange(0, first_n))
+    if split_test_off_train:
+        n_train = len(dst_train)
+        n_split = int(np.ceil(n_train * 0.8))
+        dst_test = torch.utils.data.Subset(
+            deepcopy(dst_train), np.arange(n_split, n_train)
+        )
+        dst_train = torch.utils.data.Subset(deepcopy(dst_train), np.arange(0, n_split))
+
+    eval_batch_size = 256
+    trainloader = torch.utils.data.DataLoader(
+        dst_train, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True
+    )
+    train_det_loader = torch.utils.data.DataLoader(
+        dst_train,
+        batch_size=eval_batch_size,
+        shuffle=False,
+        num_workers=2,
+        drop_last=False,
+    )
+    testloader = torch.utils.data.DataLoader(
+        dst_test, batch_size=eval_batch_size, shuffle=False, num_workers=2
+    )
+
+    return (
+        num_classes,
+        trainloader,
+        train_det_loader,
+        testloader,
+    )
+
+
 def run_exp(
     output_dir,
     n_epochs,
@@ -188,8 +380,9 @@ def run_exp(
     train_simclr_orig,
     ssl_loss_factor,
     train_ssl_orig_simple,
+    reverse,
 ):
-    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", 'resnet18']
+    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
     if saved_model_folder is not None:
         assert model_name == "wide_nf_net"
     writer = SummaryWriter(output_dir)
@@ -209,26 +402,21 @@ def run_exp(
     log.info("Load data...")
 
     data_path = data_locations.pytorch_data
-    (
-        channel,
-        im_size,
-        num_classes,
-        class_names,
-        trainloader,
-        train_det_loader,
-        testloader,
-    ) = get_dataset(
-        dataset.upper(),
+    (num_classes, trainloader, train_det_loader, testloader,) = load_dataset(
+        dataset,
         data_path,
-        batch_size=batch_size,
-        standardize=False,
         split_test_off_train=split_test_off_train,
+        batch_size=batch_size,
         first_n=first_n,
+        reverse=reverse,
     )
 
     log.info("Create classifier...")
-    mean = wide_nf_net.mean[dataset]
-    std = wide_nf_net.std[dataset]
+    # if dataset in
+    mean = [0.2, 0.2, 0.2]
+    std = [0.3, 0.3, 0.3]
+    # mean = wide_nf_net.mean[dataset]
+    # std = wide_nf_net.std[dataset]
 
     normalize = kornia.augmentation.Normalize(
         mean=np_to_th(mean, device="cpu", dtype=np.float32),
@@ -236,8 +424,16 @@ def run_exp(
     )
 
     clf, opt_clf = get_clf_and_optim(
-        model_name, num_classes, normalize, optim_type, saved_model_folder, depth, widen_factor, lr_clf, weight_decay)
-
+        model_name,
+        num_classes,
+        normalize,
+        optim_type,
+        saved_model_folder,
+        depth,
+        widen_factor,
+        lr_clf,
+        weight_decay,
+    )
 
     log.info("Create preprocessor...")
 
@@ -322,7 +518,14 @@ def run_exp(
                 FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
             )
         else:
-            assert dataset in ["mnist", "fashionmnist", "svhn"]
+            assert dataset in [
+                "mnist",
+                "fashionmnist",
+                "svhn",
+                "mnist_fashion",
+                "stripes",
+                "mnist_cifar",
+            ]
         aug_m.add_module("noise", Expression(lambda x: x + noise))
 
         return aug_m
@@ -330,11 +533,15 @@ def run_exp(
     # Adjust betas to unit variance
     if adjust_betas and (saved_model_folder is None):
         adjust_betas_of_clf(
-            clf, trainloder, functools.partial(
+            clf,
+            trainloder,
+            functools.partial(
                 get_aug_m,
                 trivial_augment=trivial_augment,
                 std_aug_magnitude=std_aug_magnitude,
-                extra_augs=extra_augs,))
+                extra_augs=extra_augs,
+            ),
+        )
 
     log.info("Load generative model...")
     glow = load_small_glow()
@@ -350,6 +557,7 @@ def run_exp(
         _, lp = gen(X)
         bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
         return bpd
+
     log.info("Start training...")
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
@@ -434,20 +642,21 @@ def run_exp(
             if train_simclr_orig:
                 simclr_aug = modified_simclr_pipeline_transform(True)
                 X1_X2 = [simclr_aug(x) for x in X]
-                X1 = th.stack([x1 for x1,x2 in X1_X2]).cuda()
-                X2 = th.stack([x2 for x1,x2 in X1_X2]).cuda()
+                X1 = th.stack([x1 for x1, x2 in X1_X2]).cuda()
+                X2 = th.stack([x2 for x1, x2 in X1_X2]).cuda()
                 z1 = clf[1].compute_features(clf[0](X1))
                 z2 = clf[1].compute_features(clf[0](X2))
                 simclr_loss = compute_nt_xent_loss(z1, z2)
                 clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
-                        1 + ssl_loss_factor)
+                    1 + ssl_loss_factor
+                )
 
             if train_ssl_orig_simple:
                 z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
                 ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
                 clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
-                        1 + ssl_loss_factor)
-
+                    1 + ssl_loss_factor
+                )
 
             opt_clf.zero_grad(set_to_none=True)
             clf_loss.backward()
@@ -461,11 +670,11 @@ def run_exp(
         log.info(f"Epoch {i_epoch:d}")
         results = {}
         if train_simclr_orig:
-            results['simclr_loss'] = simclr_loss.item()
-            writer.add_scalar('simclr_loss', simclr_loss.item(), i_epoch)
+            results["simclr_loss"] = simclr_loss.item()
+            writer.add_scalar("simclr_loss", simclr_loss.item(), i_epoch)
         elif train_ssl_orig_simple:
-            results['ssl_loss'] = ssl_loss.item()
-            writer.add_scalar('ssl_loss', ssl_loss.item(), i_epoch)
+            results["ssl_loss"] = ssl_loss.item()
+            writer.add_scalar("ssl_loss", ssl_loss.item(), i_epoch)
 
         with torch.no_grad():
             for with_preproc in [True, False]:
@@ -533,6 +742,14 @@ def run_exp(
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )
+            im = rescale(
+                create_rgb_image(
+                    stack_images_in_rows(th_to_np(X), th_to_np(X_preproced), n_cols=16)
+                ),
+                2,
+            )
+            im.save(os.path.join(output_dir, "X_and_X_preproced.png"))
+
         if save_models:
             th.save(
                 preproc.state_dict(), os.path.join(output_dir, "preproc_state_dict.th")
@@ -540,8 +757,9 @@ def run_exp(
             th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
     return results
 
+
 if __name__ == "__main__":
-    dataset = 'cifar10'
+    dataset = "cifar10"
     saved_model_folder = None
 
     n_epochs = 100

@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/different-clf-nets/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/toy-reverse/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -61,8 +61,9 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
+        'dataset': ['mnist_fashion', 'mnist_cifar', 'stripes'],#, 'mnist', 'fashionmnist', 'svhn'],
         #'dataset': ['cifar10'],#, 'mnist'],
+        'reverse': [True, False],
         'saved_model_folder': [None],
     })
 
@@ -85,12 +86,13 @@ def get_grid_param_list():
         },
     ]
 
-    quantize_params = [{
-        "noise_after_simplifier": False,
-        "noise_before_generator": True,
-        "np_th_seed": 0,
-        'quantize_after_simplifier': True,
-    },
+    quantize_params = [
+    #     {
+    #     "noise_after_simplifier": False,
+    #     "noise_before_generator": True,
+    #     "np_th_seed": 0,
+    #     'quantize_after_simplifier': True,
+    # },
         {
             "noise_after_simplifier": True,
             "noise_before_generator": False,
@@ -98,20 +100,6 @@ def get_grid_param_list():
             'quantize_after_simplifier': True,
         }
     ]
-
-    # quantize_params = dictlistprod(
-    #     {
-    #         "np_th_seed": range(1),
-    #         #"np_th_seed": [0],
-    #         'quantize_after_simplifier': [True,False],
-    #     }
-    # ) + dictlistprod(
-    #     {
-    #         "np_th_seed": range(1,3),
-    #         #"np_th_seed": [0],
-    #         'quantize_after_simplifier': [True,],
-    #     }
-    # )
 
     random_params = dictlistprod(
         {
@@ -127,7 +115,7 @@ def get_grid_param_list():
             "residual_preproc": [
                 True,
             ],
-            "model_name": ["resnet18"],
+            "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
             'save_models': [True],
         }
@@ -146,7 +134,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [1.0,2.0,4.0],
         }
     )
 
@@ -205,6 +193,7 @@ def run(
     train_simclr_orig,
     ssl_loss_factor,
     train_ssl_orig_simple,
+    reverse,
 ):
     if debug:
         n_epochs = 3
@@ -237,7 +226,7 @@ def run(
     os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
     os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
 
-    from lossy.experiments.one_step.run import run_exp
+    from lossy.experiments.toy_one_step.run import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()
