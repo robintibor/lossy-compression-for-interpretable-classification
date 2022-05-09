@@ -254,6 +254,7 @@ def get_in_out_acts_and_grads_per_module(
             h.remove()
     return module_to_vals
 
+
 def get_in_out_acts_and_in_out_grads_per_module_2(
     net, X, loss_fn, wanted_modules=None, **backward_kwargs
 ):
@@ -267,11 +268,14 @@ def get_in_out_acts_and_in_out_grads_per_module_2(
     def append_grads(module, grad_input, grad_output):
         if grad_output is not None:
             assert "out_grad" not in module_to_vals[module], f"{module}"
-            module_to_vals[module]["out_grad"] = (grad_output,)  # before code expected this
+            module_to_vals[module]["out_grad"] = (
+                grad_output,
+            )  # before code expected this
         else:
             assert grad_input is not None
-            module_to_vals[module]["in_grad"] = (grad_input,)  # before code expected this
-
+            module_to_vals[module]["in_grad"] = (
+                grad_input,
+            )  # before code expected this
 
     def append_activations(module, input, output):
         assert "in_act" not in module_to_vals[module]
@@ -547,8 +551,47 @@ def bnorm_batch_grad(module, in_act, out_grad):
     return weight_batch_grad, bias_batch_grad
 
 
+def relued(val_func):
+    def relued_val_func(m, x_m_vals, ref_m_vals):
+        x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
+        relued_x_and_ref_vals = []
+        for x_val, ref_val in x_and_ref_vals:
+            mask = ref_val > 0
+            x_val = x_val * mask
+            ref_val = ref_val * mask
+            relued_x_and_ref_vals.append((x_val, ref_val))
+        return relued_x_and_ref_vals
+
+    return relued_val_func
+
+
+def clipped(val_func):
+    def clipped_val_func(m, x_m_vals, ref_m_vals):
+        x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
+        clipped_x_and_ref_vals = []
+        for x_val, ref_val in x_and_ref_vals:
+            x_val = th.minimum(x_val, ref_val)
+            clipped_x_and_ref_vals.append((x_val, ref_val))
+        return clipped_x_and_ref_vals
+
+    return clipped_val_func
+
+
+def refed(val_func, key):
+    def refed_val_func(m, x_m_vals, ref_m_vals):
+        x_m_vals = copy(x_m_vals)
+        x_m_vals[key] = ref_m_vals[key]
+        return val_func(m, x_m_vals, ref_m_vals)
+
+    return refed_val_func
+
+
 def grad_act(m, x_m_vals, ref_m_vals):
     return [(x_m_vals["out_grad"][0], ref_m_vals["out_grad"][0])]
+
+
+def grad_inact(m, x_m_vals, ref_m_vals):
+    return [(x_m_vals["in_grad"][0], ref_m_vals["in_grad"][0])]
 
 
 def grad_act_act(m, x_m_vals, ref_m_vals):
@@ -570,12 +613,14 @@ def grad_act_relued(m, x_m_vals, ref_m_vals):
     ]
 
 
-def gradact_act_relued(m, x_m_vals, ref_m_vals):
-    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
+gradact_act_relued = relued(grad_act_act)
+
+
+def gradinact_act(m, x_m_vals, ref_m_vals):
     return [
         (
-            mask * x_m_vals["out_act"] * x_m_vals["out_grad"][0],
-            mask * ref_m_vals["out_act"] * ref_m_vals["out_grad"][0],
+             x_m_vals["in_act"][0] * x_m_vals["in_grad"][0],
+             ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0],
         )
     ]
 
@@ -590,30 +635,11 @@ def gradinact_act_relued(m, x_m_vals, ref_m_vals):
     ]
 
 
-def gradact_ref_act(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return grad_act_act(m, x_m_vals, ref_m_vals)
+gradact_ref_act = refed(grad_act_act, "out_grad")
+gradact_act_relued_clipped = clipped(relued(grad_act_act))
+gradact_ref_act_relued = relued(refed(grad_act_act, "out_grad"))
+gradact_ref_act_relued_clipped = clipped(relued(refed(grad_act_act,  "out_grad")))
 
-
-def gradact_act_relued_clipped(m, x_m_vals, ref_m_vals):
-    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
-    ref_vals = mask * ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]
-    x_vals = mask * x_m_vals["out_act"] * x_m_vals["out_grad"][0]
-    x_vals = x_vals.minimum(ref_vals)
-    return [(x_vals, ref_vals)]
-
-
-def gradact_ref_act_relued(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradact_act_relued(m, x_m_vals, ref_m_vals)
-
-
-def gradact_ref_act_relued_clipped(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradact_act_relued_clipped(m, x_m_vals, ref_m_vals)
 
 
 def gradparam_per_batch(m, vals):
@@ -641,6 +667,7 @@ def gradparam(m, x_m_vals, ref_m_vals):
     ref_grads = gradparam_per_batch(m, ref_m_vals)
     grad_tuples = [(x_grads[key], ref_grads[key]) for key in x_grads]
     return grad_tuples
+
 
 
 def gradparam_relued(m, x_m_vals, ref_m_vals):
@@ -673,88 +700,37 @@ def gradparam_param(m, x_m_vals, ref_m_vals):
     ]
     return grad_tuples
 
-
-def gradparam_param_relued(m, x_m_vals, ref_m_vals):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
-    x_grads = gradparam_per_batch(m, x_m_vals)
-    ref_grads = gradparam_per_batch(m, ref_m_vals)
-
-    grad_tuples = []
-    for key in x_grads:
-        param = getattr(m, key).unsqueeze(0)
-        mask = (ref_grads[key] * param) > 0
-        x_val = mask * x_grads[key] * param
-        ref_val = mask * ref_grads[key] * param
-        grad_tuples.append((x_val, ref_val))
-
-    return grad_tuples
-
-
-def gradparam_param_relued_clipped(m, x_m_vals, ref_m_vals):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
-    x_grads = gradparam_per_batch(m, x_m_vals)
-    ref_grads = gradparam_per_batch(m, ref_m_vals)
-
-    grad_tuples = []
-    for key in x_grads:
-        param = getattr(m, key).unsqueeze(0)
-        mask = (ref_grads[key] * param) > 0
-        x_val = mask * x_grads[key] * param
-        ref_val = mask * ref_grads[key] * param
-        x_val = x_val.minimum(ref_val)
-        grad_tuples.append((x_val, ref_val))
-
-    return grad_tuples
+gradparam_param_relued = relued(gradparam_param)
+gradparam_param_relued_clipped = clipped(relued(gradparam_param))
 
 
 def relu_match(val_func):
     def relued_val_func(m, x_m_vals, ref_m_vals):
         x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
         x_and_ref_vals = [
-            (x_val, th.nn.functional.relu(ref_val))
-            for x_val, ref_val in x_and_ref_vals
+            (x_val, th.nn.functional.relu(ref_val)) for x_val, ref_val in x_and_ref_vals
         ]
         return x_and_ref_vals
+
     return relued_val_func
 
-
-def gradparam_ref(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradparam(m, x_m_vals, ref_m_vals)
-
-
-def gradparam_ref_relued(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradparam_relued(m, x_m_vals, ref_m_vals)
-
-
-def gradparam_ref_param(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradparam_param(m, x_m_vals, ref_m_vals)
-
-
-def gradparam_ref_param_relued(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradparam_param_relued(m, x_m_vals, ref_m_vals)
-
-
-def gradparam_ref_param_relued_clipped(m, x_m_vals, ref_m_vals):
-    x_m_vals = copy(x_m_vals)
-    x_m_vals["out_grad"] = ref_m_vals["out_grad"]
-    return gradparam_param_relued_clipped(m, x_m_vals, ref_m_vals)
+gradparam_ref = refed(gradparam, "out_grad")
+gradparam_ref_relued = relued(refed(gradparam, "out_grad"))
+gradparam_ref_param = refed(gradparam_param, "out_grad")
+gradparam_ref_param_relued = relued(refed(gradparam_param, "out_grad"))
+gradparam_ref_param_relued_clipped = clipped(relued(refed(gradparam_param, "out_grad")))
 
 def gradparam_param_unfolded(m, x_m_vals, ref_m_vals):
     if m.__class__.__name__ == "Conv2d":
-        x_grad_ws = unfolded_w_grad_w(m, x_m_vals['in_act'][0], x_m_vals['out_grad'][0])
+        x_grad_ws = unfolded_w_grad_w(m, x_m_vals["in_act"][0], x_m_vals["out_grad"][0])
         with th.no_grad():
-            ref_grad_ws = unfolded_w_grad_w(m, ref_m_vals['in_act'][0], ref_m_vals['out_grad'][0])
+            ref_grad_ws = unfolded_w_grad_w(
+                m, ref_m_vals["in_act"][0], ref_m_vals["out_grad"][0]
+            )
         return x_grad_ws, ref_grad_ws
     else:
         return gradparam_param(m, x_m_vals, ref_m_vals)
+
 
 def unfolded_w_grad_w(
     m,
