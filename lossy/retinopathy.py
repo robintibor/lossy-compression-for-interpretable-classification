@@ -4,6 +4,7 @@ import os.path
 from PIL import Image
 import torch
 import pandas as pd
+import numpy as np
 
 my_transform = transforms.Compose([
     transforms.Resize((299, 299)),
@@ -23,6 +24,7 @@ class RetinaDataset(Dataset):
         self.df = self.df.iloc[i_start:i_stop]
         self.transform = transform
         self.imagepath = imagepath
+        self.y = np.array(self.df.level)
 
     def __len__(self):
         return len(self.df)

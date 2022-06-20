@@ -4,84 +4,18 @@ import numpy as np
 from einops import rearrange
 from backpack.utils.subsampling import subsample
 from functools import partial
+from torch import nn
 
 
-def f_act(act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param):
-    return act_x, act_ref
-
-
-def f_gradact(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return gradact_x, gradact_ref
-
-
-def f_gradact_act(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return act_x * gradact_x, act_ref * gradact_ref
-
-
-def f_gradact_act_relued(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    mask = (act_ref * gradact_ref) > 0
-    return mask * act_x * gradact_x, mask * act_ref * gradact_ref
-
-
-def f_gradact_act_relued_clipped(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    mask = (act_ref * gradact_ref) > 0
-    ref_vals = mask * act_ref * gradact_ref
-    x_vals = mask * act_x * gradact_x
-    x_vals = x_vals.minimum(ref_vals)
-    return x_vals, ref_vals
-
-
-def f_gradact_ref_act_relued(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return f_gradact_act_relued(
-        act_x, gradact_ref, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-    )
-
-
-def f_gradact_ref_act_relued_clipped(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return f_gradact_act_relued_clipped(
-        act_x, gradact_ref, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-    )
-
-
-def f_gradparam(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return gradparam_x, gradparam_ref
-
-
-def f_gradparam_param(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    return gradparam_x * param, gradparam_ref * param
-
-
-def f_gradparam_param_relued(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    mask = (gradparam_ref * param) > 0
-    return mask * gradparam_x * param, mask * gradparam_ref * param
-
-
-def f_gradparam_param_relued_clipped(
-    act_x, gradact_x, gradparam_x, act_ref, gradact_ref, gradparam_ref, param
-):
-    mask = (gradparam_ref * param) > 0
-    ref_vals = mask * gradparam_ref * param
-    x_vals = mask * gradparam_x * param
-    x_vals = x_vals.minimum(ref_vals)
-    return x_vals, ref_vals
+class ReLUSoftPlusGrad(nn.Module):
+    def __init__(self, softplus_mod):
+        super().__init__()
+        self.softplus = softplus_mod
+        
+    def forward(self, x):
+        relu_x = nn.functional.relu(x)
+        softplus_x = self.softplus(x)
+        return softplus_x + (relu_x - softplus_x).detach()
 
 
 def get_all_activations(
@@ -108,154 +42,7 @@ def get_all_activations(
     return activations
 
 
-def get_in_activations_per_module(
-    net,
-    X,
-    wanted_modules=None,
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-    activations = {m: {} for m in wanted_modules}
-
-    def append_activations(module, input, output):
-        activations[module] = input
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-    try:
-        _ = net(X)
-    finally:
-        for h in handles:
-            h.remove()
-    return activations
-
-
-def get_activations_per_module(net, X, wanted_modules=None):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-    activations = {m: {} for m in wanted_modules}
-
-    def append_activations(module, input, output):
-        activations[module] = output
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-    try:
-        _ = net(X)
-    finally:
-        for h in handles:
-            h.remove()
-    return activations
-
-
-def get_all_activations_and_grads(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-    activations = []
-    grads = []
-
-    def append_activations(module, input, output):
-        activations.append(output)
-
-    def append_grads(module, grad_input, grad_output):
-        grads.insert(0, grad_output)
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-        handle = module.register_full_backward_hook(append_grads)
-        handles.append(handle)
-    try:
-        output = net(X)
-        loss = loss_fn(output)
-        loss.backward(**backward_kwargs)
-    finally:
-        for h in handles:
-            h.remove()
-    return activations, grads
-
-
-def get_in_out_activations_and_grads(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-    in_activations = []
-    out_activations = []
-    grads = []
-
-    def append_activations(module, input, output):
-        in_activations.append(input)
-        out_activations.append(output)
-
-    def append_grads(module, grad_input, grad_output):
-        grads.insert(0, grad_output)
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-        handle = module.register_full_backward_hook(append_grads)
-        handles.append(handle)
-    try:
-        output = net(X)
-        loss = loss_fn(output)
-        loss.backward(**backward_kwargs)
-    finally:
-        for h in handles:
-            h.remove()
-    return in_activations, out_activations, grads
-
-
-def get_in_out_acts_and_grads_per_module(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-
-    module_to_vals = {m: {} for m in wanted_modules}
-
-    def append_activations(module, input, output):
-        # if "in_act" in module_to_vals[module]:
-        #    return
-        assert "in_act" not in module_to_vals[module]
-        module_to_vals[module]["in_act"] = input
-        assert "out_act" not in module_to_vals[module]
-        module_to_vals[module]["out_act"] = output
-
-    def append_grads(module, grad_input, grad_output):
-        # see https://github.com/pytorch/pytorch/issues/25723 for why this func may be called twice
-        if module not in module_to_vals:
-            return
-        if "out_grad" in module_to_vals[module]:
-            return
-        assert "out_grad" not in module_to_vals[module], f"{module}"
-        module_to_vals[module]["out_grad"] = grad_output
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-        handle = module.register_full_backward_hook(append_grads)
-        handles.append(handle)
-    try:
-        output = net(X)
-        loss = loss_fn(output)
-        loss.backward(**backward_kwargs)
-    finally:
-        for h in handles:
-            h.remove()
-    return module_to_vals
-
-
-def get_in_out_acts_and_in_out_grads_per_module_2(
+def get_in_out_acts_and_in_out_grads_per_module(
     net, X, loss_fn, wanted_modules=None, **backward_kwargs
 ):
     if wanted_modules is None:
@@ -267,31 +54,35 @@ def get_in_out_acts_and_in_out_grads_per_module_2(
 
     def append_grads(module, grad_input, grad_output):
         if grad_output is not None:
-            assert "out_grad" not in module_to_vals[module], f"{module}"
-            module_to_vals[module]["out_grad"] = (
-                grad_output,
-            )  # before code expected this
+            if "out_grad" not in module_to_vals[module]:
+                module_to_vals[module]["out_grad"] = []
+            module_to_vals[module]["out_grad"].append(grad_output)
         else:
             assert grad_input is not None
-            module_to_vals[module]["in_grad"] = (
-                grad_input,
-            )  # before code expected this
+            if "in_grad" not in module_to_vals[module]:
+                module_to_vals[module]["in_grad"] = []
+            module_to_vals[module]["in_grad"].append(grad_input)
 
     def append_activations(module, input, output):
         assert "in_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
         assert "out_act" not in module_to_vals[module]
+        if hasattr(output, 'register_hook'):
+            output = (output,)
         module_to_vals[module]["out_act"] = output
-        # see https://github.com/pytorch/pytorch/issues/25723 for why like this
-        handle = output.register_hook(
-            partial(
-                append_grads,
-                module,
-                None,
+
+        for a_output in output:
+            if a_output is None:
+                continue
+            # see https://github.com/pytorch/pytorch/issues/25723 for why like this
+            handle = a_output.register_hook(
+                partial(
+                    append_grads,
+                    module,
+                    None,
+                )
             )
-        )
-        handles.append(handle)
-        assert len(input) == 1
+            handles.append(handle)
         for a_input in input:
             # see https://github.com/pytorch/pytorch/issues/25723 for why like this
             handle = a_input.register_hook(
@@ -316,83 +107,6 @@ def get_in_out_acts_and_in_out_grads_per_module_2(
     return module_to_vals
 
 
-def get_in_out_acts_and_grads_per_module_2(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-
-    module_to_vals = {m: {} for m in wanted_modules}
-
-    handles = []
-
-    def append_grads(module, grad_input, grad_output):
-        assert "out_grad" not in module_to_vals[module], f"{module}"
-        module_to_vals[module]["out_grad"] = (grad_output,)  # before code expected this
-
-    def append_activations(module, input, output):
-        assert "in_act" not in module_to_vals[module]
-        module_to_vals[module]["in_act"] = input
-        assert "out_act" not in module_to_vals[module]
-        module_to_vals[module]["out_act"] = output
-        # see https://github.com/pytorch/pytorch/issues/25723 for why like this
-        handle = output.register_hook(
-            partial(
-                append_grads,
-                module,
-                None,
-            )
-        )
-        handles.append(handle)
-
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-    try:
-        output = net(X)
-        loss = loss_fn(output)
-        loss.backward(**backward_kwargs)
-    finally:
-        for h in handles:
-            h.remove()
-    return module_to_vals
-
-
-def get_in_out_acts_and_in_out_grads_per_module(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
-):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-
-    module_to_vals = {m: {} for m in wanted_modules}
-
-    def append_activations(module, input, output):
-        assert "in_act" not in module_to_vals[module]
-        module_to_vals[module]["in_act"] = input
-        assert "out_act" not in module_to_vals[module]
-        module_to_vals[module]["out_act"] = output
-
-    def append_grads(module, grad_input, grad_output):
-        assert "in_grad" not in module_to_vals[module], f"{module}"
-        module_to_vals[module]["in_grad"] = grad_input
-        assert "out_grad" not in module_to_vals[module], f"{module}"
-        module_to_vals[module]["out_grad"] = grad_output
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-        handle = module.register_full_backward_hook(append_grads)
-        handles.append(handle)
-    try:
-        output = net(X)
-        loss = loss_fn(output)
-        loss.backward(**backward_kwargs)
-    finally:
-        for h in handles:
-            h.remove()
-    return module_to_vals
-
 
 def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kwargs):
     if wanted_modules is None:
@@ -404,8 +118,9 @@ def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kw
         assert "in_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
         assert "out_act" not in module_to_vals[module]
+        if hasattr(output, 'register_hook'):
+            output = (output,)
         module_to_vals[module]["out_act"] = output
-
     handles = []
     for module in wanted_modules:
         handle = module.register_forward_hook(append_activations)
@@ -586,60 +301,79 @@ def refed(val_func, key):
     return refed_val_func
 
 
-def grad_act(m, x_m_vals, ref_m_vals):
-    return [(x_m_vals["out_grad"][0], ref_m_vals["out_grad"][0])]
+def grad_out_act(m, x_m_vals, ref_m_vals):
+    return list(zip(x_m_vals["out_grad"], ref_m_vals["out_grad"]))
 
 
-def grad_inact(m, x_m_vals, ref_m_vals):
-    return [(x_m_vals["in_grad"][0], ref_m_vals["in_grad"][0])]
+def grad_in_act(m, x_m_vals, ref_m_vals):
+    return list(zip(x_m_vals["in_grad"], ref_m_vals["in_grad"]))
 
 
-def grad_act_act(m, x_m_vals, ref_m_vals):
+def grad_out_act_act(m, x_m_vals, ref_m_vals):
     return [
         (
-            x_m_vals["out_act"] * x_m_vals["out_grad"][0],
-            ref_m_vals["out_act"] * ref_m_vals["out_grad"][0],
+           x_a * x_g, r_a * r_g
+        )
+        for x_a, x_g, r_a, r_g in zip(
+            x_m_vals["out_act"], x_m_vals["out_grad"],
+            ref_m_vals["out_act"], ref_m_vals["out_grad"],
+
         )
     ]
 
 
 def grad_act_relued(m, x_m_vals, ref_m_vals):
-    mask = (ref_m_vals["out_act"] * ref_m_vals["out_grad"][0]) > 0
+    vals = []
+    for x_a, x_g, r_a, r_g in zip(
+            x_m_vals["out_act"], x_m_vals["out_grad"],
+            ref_m_vals["out_act"], ref_m_vals["out_grad"],
+
+    ):
+        mask = (r_a * r_g) > 0
+        vals.append((mask * x_g), (mask * r_g))
+    return vals
+
+
+def grad_in_act_act(m, x_m_vals, ref_m_vals):
     return [
         (
-            mask * x_m_vals["out_grad"][0],
-            mask * ref_m_vals["out_grad"][0],
+           x_a * x_g, r_a * r_g
+        )
+        for x_a, x_g, r_a, r_g in zip(
+            x_m_vals["in_act"], x_m_vals["in_grad"],
+            ref_m_vals["in_act"], ref_m_vals["in_grad"],
         )
     ]
 
 
-gradact_act_relued = relued(grad_act_act)
+def grad_in_act_act_same_sign(m , x_m_vals, ref_m_vals):
+    vals = []
+    for x_a, x_g, r_a, r_g in zip(
+        x_m_vals["in_act"], x_m_vals["in_grad"],
+        ref_m_vals["in_act"], ref_m_vals["in_grad"],
+    ):
+        mask_ref = (r_a * r_g) > 0
+        mask = (mask_ref * (x_g.sign() == r_g.sign()))
+
+        x_val = (r_g * x_a)  #clip_min_max(xg, rg) *
+        ref_val = (mask * r_g * r_a)
+        vals.append((x_val, ref_val))
+    return vals
 
 
-def gradinact_act(m, x_m_vals, ref_m_vals):
-    return [
-        (
-             x_m_vals["in_act"][0] * x_m_vals["in_grad"][0],
-             ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0],
-        )
-    ]
+def grad_in_act_act_same_sign_masked(m , x_m_vals, ref_m_vals):
+    vals = []
+    for x_a, x_g, r_a, r_g in zip(
+        x_m_vals["in_act"], x_m_vals["in_grad"],
+        ref_m_vals["in_act"], ref_m_vals["in_grad"],
+    ):
+        mask_ref = (r_a * r_g) > 0
+        mask = (mask_ref * (x_g.sign() == r_g.sign()))
 
-
-def gradinact_act_relued(m, x_m_vals, ref_m_vals):
-    mask = (ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0]) > 0
-    return [
-        (
-            mask * x_m_vals["in_act"][0] * x_m_vals["in_grad"][0],
-            mask * ref_m_vals["in_act"][0] * ref_m_vals["in_grad"][0],
-        )
-    ]
-
-
-gradact_ref_act = refed(grad_act_act, "out_grad")
-gradact_act_relued_clipped = clipped(relued(grad_act_act))
-gradact_ref_act_relued = relued(refed(grad_act_act, "out_grad"))
-gradact_ref_act_relued_clipped = clipped(relued(refed(grad_act_act,  "out_grad")))
-
+        x_val = (r_g * x_a * mask)  #clip_min_max(xg, rg) *
+        ref_val = (mask * r_g * r_a)
+        vals.append((x_val, ref_val))
+    return vals
 
 
 def gradparam_per_batch(m, vals):
@@ -700,9 +434,6 @@ def gradparam_param(m, x_m_vals, ref_m_vals):
     ]
     return grad_tuples
 
-gradparam_param_relued = relued(gradparam_param)
-gradparam_param_relued_clipped = clipped(relued(gradparam_param))
-
 
 def relu_match(val_func):
     def relued_val_func(m, x_m_vals, ref_m_vals):
@@ -714,11 +445,17 @@ def relu_match(val_func):
 
     return relued_val_func
 
-gradparam_ref = refed(gradparam, "out_grad")
-gradparam_ref_relued = relued(refed(gradparam, "out_grad"))
-gradparam_ref_param = refed(gradparam_param, "out_grad")
-gradparam_ref_param_relued = relued(refed(gradparam_param, "out_grad"))
-gradparam_ref_param_relued_clipped = clipped(relued(refed(gradparam_param, "out_grad")))
+
+def clip_nonzero_max(val_func):
+    def clipped_val_func(m, x_m_vals, ref_m_vals):
+        x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
+        x_and_ref_vals = [
+            (th.where(ref_val > 0, th.minimum(x_val, ref_val), x_val), ref_val) for x_val, ref_val in x_and_ref_vals
+        ]
+        return x_and_ref_vals
+    return clipped_val_func
+
+
 
 def gradparam_param_unfolded(m, x_m_vals, ref_m_vals):
     if m.__class__.__name__ == "Conv2d":
@@ -752,3 +489,74 @@ def unfolded_w_grad_w(
             all_grad_ws.append(out)
     all_grad_ws = th.stack(all_grad_ws, dim=1)
     return all_grad_ws
+
+
+def compute_dist(dist_fn, val_fn,
+                 X_act_grads, ref_act_grads, ):
+    dists = []
+    for m in X_act_grads:
+        vals = val_fn(m, X_act_grads[m], ref_act_grads[m])
+        for val_x, val_ref in vals:
+            dist = dist_fn(th.flatten(val_x, start_dim=1), th.flatten(val_ref, start_dim=1))
+            dists.append(dist)
+    return dists
+
+
+def compute_multiple_dists(dist_fns, val_fn, X_act_grads, ref_act_grads):
+    dists_per_fn = {d_fn: [] for d_fn in dist_fns}
+    for m in X_act_grads:
+        vals = val_fn(m, X_act_grads[m], ref_act_grads[m])
+        for val_x, val_ref in vals:
+            for dist_fn in dist_fns:
+                dist = dist_fn(th.flatten(val_x, start_dim=1), th.flatten(val_ref, start_dim=1))
+                dists_per_fn[dist_fn].append(dist)
+    return dists_per_fn
+
+
+def cosine_distance(*args, **kwargs):
+    return 1 - th.nn.functional.cosine_similarity(*args, **kwargs)
+
+
+def sse_loss(x, *args, **kwargs):
+    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction='none').sum(
+        dim=tuple(range(1, len(x.shape))))
+
+
+def mse_loss(x, *args, **kwargs):
+    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction='none').mean(
+        dim=tuple(range(1, len(x.shape))))
+
+
+def asym_cos_dist(val_x, val_ref):
+    return 1 - (th.sum(val_x * val_ref, dim=1) / th.sum(val_ref * val_ref, dim=1))
+
+
+def larger_magnitude_cos_dist(val_x, val_ref, *args, **kwargs):
+    cos_sim = th.nn.functional.cosine_similarity(val_x, val_ref)
+    ref_sqrt_squared_sum = th.sqrt(th.sum(val_ref * val_ref, dim=1))
+    x_sqrt_squared_sum = th.sqrt(th.sum(val_x * val_x, dim=1))
+    ratios = x_sqrt_squared_sum / ref_sqrt_squared_sum
+    assert ratios.shape == cos_sim.shape
+    corrected_cos_sim = th.clamp_max(ratios, 1) * cos_sim
+    return 1 - corrected_cos_sim
+
+
+def normed_mse(val_x, val_ref, *args, **kwargs):
+    mses = th.nn.functional.mse_loss(val_x, val_ref, *args, **kwargs, reduction='none').mean(
+        dim=tuple(range(1, len(val_x.shape))))
+    return mses / th.mean(val_ref * val_ref, dim=tuple(range(1, len(val_x.shape))))
+
+
+def detach_acts_grads(acts_grads):
+    for m in acts_grads:
+        for key in acts_grads[m]:
+            acts_grads[m][key] = [a.detach() if hasattr(a, 'detach') else a for a in acts_grads[m][key]]
+    return acts_grads
+
+
+def filter_act_grads(act_grads, wanted_keys):
+    filtered = {}
+    for m in act_grads:
+        if all([key in act_grads[m] for key in wanted_keys]):
+            filtered[m] = act_grads[m]
+    return filtered
