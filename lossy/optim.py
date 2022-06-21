@@ -2,7 +2,10 @@ import torch
 import torch as th
 from torch.optim.optimizer import Optimizer, required
 from lossy.util import np_to_th, th_to_np
-import higher
+try:
+    import higher
+except ModuleNotFoundError:
+    pass
 import logging
 log = logging.getLogger(__name__)
 
