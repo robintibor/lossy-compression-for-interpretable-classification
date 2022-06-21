@@ -2,9 +2,25 @@ from copy import copy
 import torch as th
 import numpy as np
 from einops import rearrange
-from backpack.utils.subsampling import subsample
 from functools import partial
 from torch import nn
+
+
+# https://github.com/f-dangel/backpack/blob/1da7e53ebb2c490e2b7dd9f79116583641f3cca1/backpack/utils/subsampling.py
+def subsample(tensor: Tensor, dim: int = 0, subsampling: List[int] = None) -> Tensor:
+    """Select samples from a tensor along a dimension.
+    Args:
+        tensor: Tensor to select from.
+        dim: Selection dimension. Defaults to ``0``.
+        subsampling: Indices of samples that are sliced along the dimension.
+            Defaults to ``None`` (use all samples).
+    Returns:
+        Tensor of same rank that is sub-sampled along the dimension.
+    """
+    if subsampling is None:
+        return tensor
+    else:
+        return tensor[(slice(None),) * dim + (subsampling,)]
 
 
 class ReLUSoftPlusGrad(nn.Module):
