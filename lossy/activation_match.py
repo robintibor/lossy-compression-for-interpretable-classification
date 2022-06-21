@@ -4,7 +4,8 @@ import numpy as np
 from einops import rearrange
 from functools import partial
 from torch import nn
-
+from typing import List
+from torch import Tensor
 
 # https://github.com/f-dangel/backpack/blob/1da7e53ebb2c490e2b7dd9f79116583641f3cca1/backpack/utils/subsampling.py
 def subsample(tensor: Tensor, dim: int = 0, subsampling: List[int] = None) -> Tensor:
