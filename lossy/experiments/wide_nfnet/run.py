@@ -9,7 +9,6 @@ import torchvision.transforms as transforms
 import wide_resnet.config as cf
 from braindecode.util import set_random_seeds
 from tensorboardX import SummaryWriter
-from wide_resnet.networks import *
 import os.path
 
 from lossy.datasets import get_dataset
@@ -126,15 +125,15 @@ def run_exp(
     test_set.transform = transform_test
     test_set.transforms.transform = transform_test
     if nf_net:
-        from wide_resnet.networks.wide_nfnet import conv_init, Wide_NFResNet
+        from lossy.wide_nf_net import conv_init, Wide_NFResNet
 
         net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
                             activation=activation).cuda()
         file_name = f"wide-nfresnet-{depth:d}x{widen_factor:d}"
         net.apply(conv_init)
     else:
-        from wide_resnet.networks.wide_resnet import conv_init, Wide_ResNet
-
+        from lossy.wide_resnet import conv_init, Wide_ResNet
+        assert activation == 'relu'
         net = Wide_ResNet(depth, widen_factor, dropout, num_classes).cuda()
         file_name = f"wide-resnet-{depth:d}x{widen_factor:d}"
         net.apply(conv_init)

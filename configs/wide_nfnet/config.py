@@ -27,7 +27,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/home/schirrmr/data/exps/lossy/cifar100-wide-nfnets/',
+        'save_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets-shifted-softplus/',
     }]
 
     debug_params = [{
@@ -37,15 +37,15 @@ def get_grid_param_list():
     train_params = dictlistprod({
         'n_epochs': [200],
         'adaptive_gradient_clipping': [False],
-        'optim_type': ['sam'],
-        'lr': [1e-1,5e-2,1e-2,5e-3],
+        'optim_type': ['adamw'],
+        'lr': [1e-3,3e-4],#[1e-1,5e-2,1e-2,5e-3],
         'weight_decay': [1e-5],
     })
 
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['cifar100']
+        "dataset": ['cifar10']
     })
 
     random_params= dictlistprod({
@@ -58,7 +58,7 @@ def get_grid_param_list():
         'widen_factor': [2,10],
         'dropout': [0.3],
         'save_model': [True],
-        'activation': ["relu"],
+        'activation': ["shifted_softplus_1", "shifted_softplus_2", "shifted_softplus_4"],
     })
 
     optim_params = dictlistprod({
@@ -116,6 +116,15 @@ def run(
                      level=logging.DEBUG, stream=sys.stdout)
     start_time = time.time()
     ex.info['finished'] = False
+
+    import os
+    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
+    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+
+
+
     from lossy.experiments.wide_nfnet.run import run_exp
 
     results = run_exp(**kwargs)

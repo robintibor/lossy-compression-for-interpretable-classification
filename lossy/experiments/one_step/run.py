@@ -33,11 +33,9 @@ from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transfor
 log = logging.getLogger(__name__)
 
 def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_model_folder,
-                      depth, widen_factor, lr_clf, weight_decay):
+                      depth, widen_factor, lr_clf, weight_decay, activation):
     if model_name in ['wide_nf_net', 'wide_bnorm_net']:
-
         dropout = 0.3
-        activation = "elu"  # was relu in past
         if saved_model_folder is not None:
             saved_model_config = json.load(
                 open(os.path.join(saved_model_folder, "config.json"), "r")
@@ -57,7 +55,8 @@ def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_mode
             nf_net.apply(conv_init)
             model = nf_net
         elif model_name == 'wide_bnorm_net':
-            activation = "relu"  # overwrite for wide resnet for now
+            assert activation == 'relu'
+            #activation = "relu"  # overwrite for wide resnet for now
             from lossy.wide_resnet import Wide_ResNet, conv_init
             model = Wide_ResNet(
                 depth, widen_factor, dropout, num_classes, activation=activation
@@ -188,6 +187,7 @@ def run_exp(
     train_simclr_orig,
     ssl_loss_factor,
     train_ssl_orig_simple,
+    activation,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", 'resnet18']
     if saved_model_folder is not None:
@@ -236,7 +236,8 @@ def run_exp(
     )
 
     clf, opt_clf = get_clf_and_optim(
-        model_name, num_classes, normalize, optim_type, saved_model_folder, depth, widen_factor, lr_clf, weight_decay)
+        model_name, num_classes, normalize, optim_type, saved_model_folder, depth, widen_factor, lr_clf, weight_decay,
+        activation)
 
 
     log.info("Create preprocessor...")
@@ -350,6 +351,7 @@ def run_exp(
         _, lp = gen(X)
         bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
         return bpd
+    print("clf", clf)
     log.info("Start training...")
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):

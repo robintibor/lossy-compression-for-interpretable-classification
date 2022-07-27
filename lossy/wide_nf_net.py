@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import math
 from torch.nn import init
 import numpy as np
+from lossy.shifted_softplus import ShiftedSoftplus
 
 
 mean = {
@@ -134,10 +135,14 @@ _nonlin_gamma = dict(
     selu=1.0008515119552612,
     sigmoid=4.803835391998291,
     silu=1.7881293296813965,
+    shifted_softplus_1=1.9190,
+    shifted_softplus_2=1.8338,
+    shifted_softplus_4=1.7630,
     softsign=2.338853120803833,
     softplus=1.9203323125839233,
     tanh=1.5939117670059204,
 )
+
 
 activation_fn = {
     "identity": lambda x, *args, **kwargs: nn.Identity(*args, **kwargs)(x)
@@ -165,6 +170,12 @@ activation_fn = {
     * _nonlin_gamma["silu"],
     "softplus": lambda x, *args, **kwargs: nn.Softplus(*args, **kwargs)(x)
     * _nonlin_gamma["softplus"],
+    "shifted_softplus_1": lambda x, *args, **kwargs: ShiftedSoftplus(1, *args, **kwargs)(x)
+    * _nonlin_gamma["shifted_softplus_1"],
+    "shifted_softplus_2": lambda x, *args, **kwargs: ShiftedSoftplus(2, *args, **kwargs)(x)
+    * _nonlin_gamma["shifted_softplus_2"],
+    "shifted_softplus_4": lambda x, *args, **kwargs: ShiftedSoftplus(4, *args, **kwargs)(x)
+    * _nonlin_gamma["shifted_softplus_4"],
     "tanh": lambda x, *args, **kwargs: nn.Tanh(*args, **kwargs)(x)
     * _nonlin_gamma["tanh"],
 }
@@ -210,7 +221,8 @@ class wide_basic(nn.Module):
             self.shortcut = conv_class(
                 in_planes, planes, kernel_size=1, stride=stride, bias=True
             )
-        self.act = partial(activation_fn[activation], inplace=True)
+        #self.act = partial(activation_fn[activation], inplace=True)
+        self.act = activation_fn[activation]
         self.beta = beta
         self.alpha = alpha
 

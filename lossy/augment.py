@@ -9,6 +9,19 @@ from torch import Tensor
 from typing import List, Tuple, Optional, Dict
 from torchvision.transforms import functional as F
 
+
+class Choice:
+    def __init__(self, transforms, probabilities=None):
+        self.transforms = transforms
+        if probabilities is None:
+            probabilities = [1 / len(transforms)] * len(transforms)
+        self.probabilities = th.tensor(probabilities)
+
+    def __call__(self, x):
+        i_transform = th.multinomial(self.probabilities, 1).item()
+        return self.transforms[i_transform](x)
+
+
 def posterize_with_grad(img, bits):
     uint_img = (img.detach() * 255).type(th.uint8)
     posterized = F.posterize(uint_img, bits)

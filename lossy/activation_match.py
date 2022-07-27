@@ -519,6 +519,11 @@ def compute_dist(dist_fn, val_fn,
     return dists
 
 
+def compute_vals(val_fn, X_act_grads, ref_act_grads, ):
+    all_vals = [val_fn(m, X_act_grads[m], ref_act_grads[m])
+                for m in X_act_grads]
+    return all_vals
+
 def compute_multiple_dists(dist_fns, val_fn, X_act_grads, ref_act_grads):
     dists_per_fn = {d_fn: [] for d_fn in dist_fns}
     for m in X_act_grads:

@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/different-clf-nets/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/shifted-softplus/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -85,12 +85,13 @@ def get_grid_param_list():
         },
     ]
 
-    quantize_params = [{
-        "noise_after_simplifier": False,
-        "noise_before_generator": True,
-        "np_th_seed": 0,
-        'quantize_after_simplifier': True,
-    },
+    quantize_params = [
+    #     {
+    #     "noise_after_simplifier": False,
+    #     "noise_before_generator": True,
+    #     "np_th_seed": 0,
+    #     'quantize_after_simplifier': True,
+    # },
         {
             "noise_after_simplifier": True,
             "noise_before_generator": False,
@@ -127,9 +128,10 @@ def get_grid_param_list():
             "residual_preproc": [
                 True,
             ],
-            "model_name": ["resnet18"],
+            "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
             'save_models': [True],
+            'activation': ["shifted_softplus_1", "shifted_softplus_2", "shifted_softplus_4"],
         }
     )
     optim_params = dictlistprod(
@@ -205,6 +207,7 @@ def run(
     train_simclr_orig,
     ssl_loss_factor,
     train_ssl_orig_simple,
+    activation,
 ):
     if debug:
         n_epochs = 3
