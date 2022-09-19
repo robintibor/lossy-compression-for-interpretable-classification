@@ -26,15 +26,46 @@ from lossy.wide_nf_net import activation_fn
 import logging
 import json
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
+from lossy.activation_match import relu_match, refed, relued
+from lossy.activation_match import grad_in_act_act
+from lossy.optim import set_grads_to_none
+from lossy.activation_match import cosine_distance
+from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
+from lossy.activation_match import compute_dist
+from lossy.activation_match import detach_acts_grads
+import itertools
+
 
 from lossy import wide_nf_net, data_locations
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
 
 log = logging.getLogger(__name__)
 
-def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_model_folder,
-                      depth, widen_factor, lr_clf, weight_decay, activation):
-    if model_name in ['wide_nf_net', 'wide_bnorm_net']:
+
+def restore_grads_from(params, fieldname):
+    for p in params:
+        p.grad = getattr(p, fieldname)  # .detach().clone()
+        delattr(p, fieldname)
+
+
+def save_grads_to(params, fieldname):
+    for p in params:
+        setattr(p, fieldname, p.grad.detach().clone())
+
+
+def get_clf_and_optim(
+    model_name,
+    num_classes,
+    normalize,
+    optim_type,
+    saved_model_folder,
+    depth,
+    widen_factor,
+    lr_clf,
+    weight_decay,
+    activation,
+):
+    if model_name in ["wide_nf_net", "wide_bnorm_net"]:
         dropout = 0.3
         if saved_model_folder is not None:
             saved_model_config = json.load(
@@ -47,17 +78,19 @@ def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_mode
                 "activation", "relu"
             )  # default was relu
             assert saved_model_config.get("dataset", "cifar10") == dataset
-        if model_name == 'wide_nf_net':
+        if model_name == "wide_nf_net":
             from lossy.wide_nf_net import conv_init, Wide_NFResNet
+
             nf_net = Wide_NFResNet(
                 depth, widen_factor, dropout, num_classes, activation=activation
             ).cuda()
             nf_net.apply(conv_init)
             model = nf_net
-        elif model_name == 'wide_bnorm_net':
-            assert activation == 'relu'
-            #activation = "relu"  # overwrite for wide resnet for now
+        elif model_name == "wide_bnorm_net":
+            assert activation == "relu"
+            # activation = "relu"  # overwrite for wide resnet for now
             from lossy.wide_resnet import Wide_ResNet, conv_init
+
             model = Wide_ResNet(
                 depth, widen_factor, dropout, num_classes, activation=activation
             ).cuda()
@@ -69,12 +102,12 @@ def get_clf_and_optim(model_name, num_classes, normalize, optim_type, saved_mode
                 os.path.join(saved_model_folder, "nf_net_state_dict.th")
             )
             model.load_state_dict(saved_clf_state_dict)
-    elif model_name == 'resnet18':
+    elif model_name == "resnet18":
         from lossy.resnet import resnet18
+
         model = resnet18(num_classes=num_classes)
     else:
         assert False
-
 
     clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
@@ -188,8 +221,9 @@ def run_exp(
     ssl_loss_factor,
     train_ssl_orig_simple,
     activation,
+    grad_act_match,
 ):
-    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", 'resnet18']
+    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
     if saved_model_folder is not None:
         assert model_name == "wide_nf_net"
     writer = SummaryWriter(output_dir)
@@ -236,9 +270,17 @@ def run_exp(
     )
 
     clf, opt_clf = get_clf_and_optim(
-        model_name, num_classes, normalize, optim_type, saved_model_folder, depth, widen_factor, lr_clf, weight_decay,
-        activation)
-
+        model_name,
+        num_classes,
+        normalize,
+        optim_type,
+        saved_model_folder,
+        depth,
+        widen_factor,
+        lr_clf,
+        weight_decay,
+        activation,
+    )
 
     log.info("Create preprocessor...")
 
@@ -331,11 +373,15 @@ def run_exp(
     # Adjust betas to unit variance
     if adjust_betas and (saved_model_folder is None):
         adjust_betas_of_clf(
-            clf, trainloder, functools.partial(
+            clf,
+            trainloder,
+            functools.partial(
                 get_aug_m,
                 trivial_augment=trivial_augment,
                 std_aug_magnitude=std_aug_magnitude,
-                extra_augs=extra_augs,))
+                extra_augs=extra_augs,
+            ),
+        )
 
     log.info("Load generative model...")
     glow = load_small_glow()
@@ -351,12 +397,24 @@ def run_exp(
         _, lp = gen(X)
         bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
         return bpd
+
     print("clf", clf)
     log.info("Start training...")
+    if grad_act_match:
+        use_parameter_counts = True
+        wanted_modules = []
+        wanted_names = []
+        for name, module in clf.named_modules():
+            if len(list(module.parameters(recurse=False))) > 0:
+                wanted_modules.append(module)
+                wanted_names.append(name)
+        val_fn = refed(grad_in_act_act, "in_grad")
+        dist_fn = cosine_distance
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
             clf.train()
             X = X.cuda()
+            X = X.requires_grad_(True)
             y = y.cuda()
             aug_m = get_aug_m(
                 X.shape,
@@ -369,31 +427,84 @@ def run_exp(
             simple_X_aug = aug_m(simple_X)
             X_aug = aug_m(X)
 
-            with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
-                f_clf,
-                f_opt_clf,
-            ):
-                random_state = torch.get_rng_state()
+            ## new style:
+            # just match them damn gradients
+            #
+
+            if grad_act_match:
+                loss_fn = lambda o: th.nn.functional.cross_entropy(o, y)
+                orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
+                    clf, X_aug, loss_fn, wanted_modules=wanted_modules
+                )
+                orig_acts_grads = detach_acts_grads(orig_acts_grads)
+
+                set_grads_to_none(clf.parameters())
+
+                simple_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
+                    clf,
+                    simple_X_aug,
+                    loss_fn,
+                    wanted_modules=wanted_modules,
+                    create_graph=True,
+                )
+
+                save_grads_to(clf.parameters(), "grad_tmp")
+                set_grads_to_none(clf.parameters())
+                set_grads_to_none(preproc.parameters())
+                set_grads_to_none([X])
+
+                dists_per_example = compute_dist(
+                    dist_fn,
+                    val_fn,
+                    simple_acts_grads,
+                    orig_acts_grads,
+                )
+
+                dists = torch.mean(torch.stack(dists_per_example), dim=1)
+                if use_parameter_counts:
+                    p_counts = [
+                        sum([p.numel() for p in m.parameters(recurse=False)])
+                        for m in wanted_modules
+                    ]
+                else:
+                    p_counts = p_counts = [1] * len(dists)
+                assert len(p_counts) == len(dists)
+                task_loss = weighted_sum(
+                    len(dists), *list(itertools.chain(*list(zip(p_counts, dists))))
+                )
+                f_simple_loss_before = th.zeros_like(task_loss)
+                f_simple_loss = task_loss
+                f_orig_loss = th.zeros_like(task_loss)
+                bpd_factors = th.ones_like(X[:, 0, 0, 0])
+
+            else:
+                with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
+                    f_clf,
+                    f_opt_clf,
+                ):
+                    random_state = torch.get_rng_state()
+                    f_simple_out = f_clf(simple_X_aug)
+                    f_simple_loss_before = th.nn.functional.cross_entropy(
+                        f_simple_out, y
+                    )
+                    f_opt_clf.step(f_simple_loss_before)
+
+                torch.set_rng_state(random_state)
                 f_simple_out = f_clf(simple_X_aug)
-                f_simple_loss_before = th.nn.functional.cross_entropy(f_simple_out, y)
-                f_opt_clf.step(f_simple_loss_before)
+                f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
-            torch.set_rng_state(random_state)
-            f_simple_out = f_clf(simple_X_aug)
-            f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
-
-            torch.set_rng_state(random_state)
-            f_orig_out = f_clf(X_aug)
-            f_orig_loss_per_ex = th.nn.functional.cross_entropy(
-                f_orig_out, y, reduction="none"
-            )
+                torch.set_rng_state(random_state)
+                f_orig_out = f_clf(X_aug)
+                f_orig_loss_per_ex = th.nn.functional.cross_entropy(
+                    f_orig_out, y, reduction="none"
+                )
+                f_orig_loss = th.mean(f_orig_loss_per_ex)
+                bpd_factors = (
+                    (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
+                ).detach()
 
             bpd = get_bpd(gen, simple_X)
-            bpd_factors = (
-                (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
-            ).detach()
             bpd_loss = th.mean(bpd * bpd_factors)
-            f_orig_loss = th.mean(f_orig_loss_per_ex)
             im_loss = weighted_sum(
                 1,
                 1,
@@ -412,47 +523,51 @@ def run_exp(
                 opt_preproc.step()
             opt_preproc.zero_grad(set_to_none=True)
 
-            # Classifier training
-            if resample_augmentation_for_clf:
-                aug_m = get_aug_m(
-                    X.shape,
-                    trivial_augment=trivial_augment,
-                    std_aug_magnitude=std_aug_magnitude,
-                    extra_augs=extra_augs,
-                )
-            with th.no_grad():
-                simple_X = preproc(X)
-                simple_X_aug = aug_m(simple_X)
+            if grad_act_match:
+                restore_grads_from(clf.parameters(), "grad_tmp")
+            else:
+                # Classifier training
+                if resample_augmentation_for_clf:
+                    aug_m = get_aug_m(
+                        X.shape,
+                        trivial_augment=trivial_augment,
+                        std_aug_magnitude=std_aug_magnitude,
+                        extra_augs=extra_augs,
+                    )
+                with th.no_grad():
+                    simple_X = preproc(X)
+                    simple_X_aug = aug_m(simple_X)
 
-            torch.set_rng_state(random_state)
-            z_simple = clf[1].compute_features(clf[0](simple_X_aug))
-            out = clf[1].linear(z_simple)
-            clf_loss = th.nn.functional.cross_entropy(out, y)
-            if train_orig:
-                out_orig = clf(X_aug.detach())
-                clf_loss_orig = th.nn.functional.cross_entropy(out_orig, y)
-                clf_loss = (clf_loss + clf_loss_orig) / 2
+                torch.set_rng_state(random_state)
+                z_simple = clf[1].compute_features(clf[0](simple_X_aug))
+                out = clf[1].linear(z_simple)
+                clf_loss = th.nn.functional.cross_entropy(out, y)
+                if train_orig:
+                    out_orig = clf(X_aug.detach())
+                    clf_loss_orig = th.nn.functional.cross_entropy(out_orig, y)
+                    clf_loss = (clf_loss + clf_loss_orig) / 2
 
-            if train_simclr_orig:
-                simclr_aug = modified_simclr_pipeline_transform(True)
-                X1_X2 = [simclr_aug(x) for x in X]
-                X1 = th.stack([x1 for x1,x2 in X1_X2]).cuda()
-                X2 = th.stack([x2 for x1,x2 in X1_X2]).cuda()
-                z1 = clf[1].compute_features(clf[0](X1))
-                z2 = clf[1].compute_features(clf[0](X2))
-                simclr_loss = compute_nt_xent_loss(z1, z2)
-                clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
-                        1 + ssl_loss_factor)
+                if train_simclr_orig:
+                    simclr_aug = modified_simclr_pipeline_transform(True)
+                    X1_X2 = [simclr_aug(x) for x in X]
+                    X1 = th.stack([x1 for x1, x2 in X1_X2]).cuda()
+                    X2 = th.stack([x2 for x1, x2 in X1_X2]).cuda()
+                    z1 = clf[1].compute_features(clf[0](X1))
+                    z2 = clf[1].compute_features(clf[0](X2))
+                    simclr_loss = compute_nt_xent_loss(z1, z2)
+                    clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
+                        1 + ssl_loss_factor
+                    )
 
-            if train_ssl_orig_simple:
-                z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
-                ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
-                clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
-                        1 + ssl_loss_factor)
+                if train_ssl_orig_simple:
+                    z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
+                    ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
+                    clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
+                        1 + ssl_loss_factor
+                    )
 
-
-            opt_clf.zero_grad(set_to_none=True)
-            clf_loss.backward()
+                opt_clf.zero_grad(set_to_none=True)
+                clf_loss.backward()
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
             with th.no_grad():
@@ -463,11 +578,11 @@ def run_exp(
         log.info(f"Epoch {i_epoch:d}")
         results = {}
         if train_simclr_orig:
-            results['simclr_loss'] = simclr_loss.item()
-            writer.add_scalar('simclr_loss', simclr_loss.item(), i_epoch)
+            results["simclr_loss"] = simclr_loss.item()
+            writer.add_scalar("simclr_loss", simclr_loss.item(), i_epoch)
         elif train_ssl_orig_simple:
-            results['ssl_loss'] = ssl_loss.item()
-            writer.add_scalar('ssl_loss', ssl_loss.item(), i_epoch)
+            results["ssl_loss"] = ssl_loss.item()
+            writer.add_scalar("ssl_loss", ssl_loss.item(), i_epoch)
 
         with torch.no_grad():
             for with_preproc in [True, False]:
@@ -542,8 +657,9 @@ def run_exp(
             th.save(clf.state_dict(), os.path.join(output_dir, "clf_state_dict.th"))
     return results
 
+
 if __name__ == "__main__":
-    dataset = 'cifar10'
+    dataset = "cifar10"
     saved_model_folder = None
 
     n_epochs = 100

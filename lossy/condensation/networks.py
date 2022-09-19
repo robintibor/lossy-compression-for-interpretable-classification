@@ -2,6 +2,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch as th
 import numpy as np
+
+from lossy.shifted_softplus import ShiftedSoftplus
 # Acknowledgement to
 # https://github.com/kuangliu/pytorch-cifar,
 # https://github.com/BIGBALLON/CIFAR-ZOO,
@@ -178,6 +180,8 @@ class ConvNet(nn.Module):
             self.net_act = nn.LeakyReLU(negative_slope=0.01)
         elif net_act == 'elu':
             self.net_act = nn.ELU()
+        elif net_act == 'shifted_softplus':
+            self.net_act = ShiftedSoftplus(beta=1, threshold=20)
         else:
             exit('unknown activation function: %s'%net_act)
 

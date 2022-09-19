@@ -6,6 +6,7 @@ from functools import partial
 from torch import nn
 from typing import List
 from torch import Tensor
+import torch.nn.functional as F
 
 # https://github.com/f-dangel/backpack/blob/1da7e53ebb2c490e2b7dd9f79116583641f3cca1/backpack/utils/subsampling.py
 def subsample(tensor: Tensor, dim: int = 0, subsampling: List[int] = None) -> Tensor:
@@ -28,7 +29,7 @@ class ReLUSoftPlusGrad(nn.Module):
     def __init__(self, softplus_mod):
         super().__init__()
         self.softplus = softplus_mod
-        
+
     def forward(self, x):
         relu_x = nn.functional.relu(x)
         softplus_x = self.softplus(x)
@@ -84,7 +85,7 @@ def get_in_out_acts_and_in_out_grads_per_module(
         assert "in_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
         assert "out_act" not in module_to_vals[module]
-        if hasattr(output, 'register_hook'):
+        if hasattr(output, "register_hook"):
             output = (output,)
         module_to_vals[module]["out_act"] = output
 
@@ -124,7 +125,6 @@ def get_in_out_acts_and_in_out_grads_per_module(
     return module_to_vals
 
 
-
 def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kwargs):
     if wanted_modules is None:
         wanted_modules = net.modules()
@@ -135,9 +135,10 @@ def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kw
         assert "in_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
         assert "out_act" not in module_to_vals[module]
-        if hasattr(output, 'register_hook'):
+        if hasattr(output, "register_hook"):
             output = (output,)
         module_to_vals[module]["out_act"] = output
+
     handles = []
     for module in wanted_modules:
         handle = module.register_forward_hook(append_activations)
@@ -154,6 +155,103 @@ def clip_min_max_signed(a, b):
     mask = b >= 0
     c = mask * th.minimum(a, b) + (~mask) * th.maximum(a, b)
     return c
+
+
+def conv_grad_groups(module, in_act, out_grad):
+    weight_bgrad, bias_bgrad = conv_backward(
+        in_act,
+        out_grad,
+        module.in_channels,
+        module.out_channels,
+        module.kernel_size,
+        bias=module.bias is not None,
+        stride=module.stride,
+        dilation=module.dilation,
+        padding=module.padding,
+        groups=module.groups,
+        nd=2,
+    )
+    return weight_bgrad, bias_bgrad
+
+
+# https://github.com/owkin/grad-cnns/blob/b0a9e3bb16f6a2358d3d8e9c936d8d308a648476/code/gradcnn/crb_backward.py#L25
+def conv_backward(
+    input,
+    grad_output,
+    in_channels,
+    out_channels,
+    kernel_size,
+    bias=True,
+    stride=1,
+    dilation=1,
+    padding=0,
+    groups=1,
+    nd=1,
+):
+    """Computes per-example gradients for nn.Conv1d and nn.Conv2d layers.
+    This function is used in the internal behaviour of bnn.Linear.
+    """
+
+    # Change format of stride from int to tuple if necessary.
+    if isinstance(kernel_size, int):
+        kernel_size = (kernel_size,) * nd
+    if isinstance(stride, int):
+        stride = (stride,) * nd
+    if isinstance(dilation, int):
+        dilation = (dilation,) * nd
+    if isinstance(padding, int):
+        padding = (padding,) * nd
+
+    # Get some useful sizes
+    batch_size = input.size(0)
+    input_shape = input.size()[-nd:]
+    output_shape = grad_output.size()[-nd:]
+
+    # Reshape to extract groups from the convolutional layer
+    # Channels are seen as an extra spatial dimension with kernel size 1
+    input_conv = input.view(1, batch_size * groups, in_channels // groups, *input_shape)
+
+    # Compute convolution between input and output; the batchsize is seen
+    # as channels, taking advantage of the `groups` argument
+    grad_output_conv = grad_output.view(-1, 1, 1, *output_shape)
+
+    stride = (1, *stride)
+    dilation = (1, *dilation)
+    padding = (0, *padding)
+
+    if nd == 1:
+        convnd = F.conv2d
+        s_ = np.s_[..., : kernel_size[0]]
+    elif nd == 2:
+        convnd = F.conv3d
+        s_ = np.s_[..., : kernel_size[0], : kernel_size[1]]
+    elif nd == 3:
+        raise NotImplementedError(
+            "3d convolution is not available with current per-example gradient computation"
+        )
+
+    conv = convnd(
+        input_conv,
+        grad_output_conv,
+        groups=batch_size * groups,
+        stride=dilation,
+        dilation=stride,
+        padding=padding,
+    )
+
+    # Because of rounding shapes when using non-default stride or dilation,
+    # convolution result must be truncated to convolution kernel size
+    conv = conv[s_]
+
+    # Reshape weight gradient to correct shape
+    new_shape = [batch_size, out_channels, in_channels // groups, *kernel_size]
+    weight_bgrad = conv.view(*new_shape).contiguous()
+
+    # Compute bias gradient
+    grad_output_flat = grad_output.view(batch_size, grad_output.size(1), -1)
+    bias_bgrad = th.sum(grad_output_flat, dim=2) if bias else None
+
+    return weight_bgrad, bias_bgrad
 
 
 def conv_batch_grad(module, in_act, out_grad):
@@ -175,12 +273,22 @@ def conv_batch_grad(module, in_act, out_grad):
     # # n_out_before_stride = np.array(in_act.shape[2:]) - (
     # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
     # # n_removed_by_stride =
-    weight_grad = conv_weight_grad_loop(
-        module, in_act, out_grad
-    )  # conv_weight_grad_backpack(module, in_act, out_grad)
+    # wieght_batch_grad = conv_weight_grad_loop(
+    #    module, in_act, out_grad
+    # )  # conv_weight_grad_backpack(module, in_act, out_grad)
 
-    bias_batch_grad = out_grad.sum(dim=(-2, -1))
-    return weight_grad, bias_batch_grad
+    # bias_batch_grad = out_grad.sum(dim=(-2, -1))
+    wieght_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
+    return wieght_batch_grad, bias_batch_grad
+
+
+def add_conv_bias_grad(conv_weight_grad_fn):
+    def conv_grad_fn(module, in_act, out_grad):
+        weight_grad = conv_weight_grad_fn(module, in_act, out_grad)
+        bias_grad = out_grad.sum(dim=(-2, -1))
+        return weight_grad, bias_grad
+
+    return conv_grad_fn
 
 
 def conv_weight_grad_backpack(module, in_act, out_grad):
@@ -328,13 +436,12 @@ def grad_in_act(m, x_m_vals, ref_m_vals):
 
 def grad_out_act_act(m, x_m_vals, ref_m_vals):
     return [
-        (
-           x_a * x_g, r_a * r_g
-        )
+        (x_a * x_g, r_a * r_g)
         for x_a, x_g, r_a, r_g in zip(
-            x_m_vals["out_act"], x_m_vals["out_grad"],
-            ref_m_vals["out_act"], ref_m_vals["out_grad"],
-
+            x_m_vals["out_act"],
+            x_m_vals["out_grad"],
+            ref_m_vals["out_act"],
+            ref_m_vals["out_grad"],
         )
     ]
 
@@ -342,9 +449,10 @@ def grad_out_act_act(m, x_m_vals, ref_m_vals):
 def grad_act_relued(m, x_m_vals, ref_m_vals):
     vals = []
     for x_a, x_g, r_a, r_g in zip(
-            x_m_vals["out_act"], x_m_vals["out_grad"],
-            ref_m_vals["out_act"], ref_m_vals["out_grad"],
-
+        x_m_vals["out_act"],
+        x_m_vals["out_grad"],
+        ref_m_vals["out_act"],
+        ref_m_vals["out_grad"],
     ):
         mask = (r_a * r_g) > 0
         vals.append((mask * x_g), (mask * r_g))
@@ -353,44 +461,106 @@ def grad_act_relued(m, x_m_vals, ref_m_vals):
 
 def grad_in_act_act(m, x_m_vals, ref_m_vals):
     return [
-        (
-           x_a * x_g, r_a * r_g
-        )
+        (x_a * x_g, r_a * r_g)
         for x_a, x_g, r_a, r_g in zip(
-            x_m_vals["in_act"], x_m_vals["in_grad"],
-            ref_m_vals["in_act"], ref_m_vals["in_grad"],
+            x_m_vals["in_act"],
+            x_m_vals["in_grad"],
+            ref_m_vals["in_act"],
+            ref_m_vals["in_grad"],
         )
     ]
 
 
-def grad_in_act_act_same_sign(m , x_m_vals, ref_m_vals):
+def grad_in_act_act_same_sign(m, x_m_vals, ref_m_vals):
     vals = []
     for x_a, x_g, r_a, r_g in zip(
-        x_m_vals["in_act"], x_m_vals["in_grad"],
-        ref_m_vals["in_act"], ref_m_vals["in_grad"],
+        x_m_vals["in_act"],
+        x_m_vals["in_grad"],
+        ref_m_vals["in_act"],
+        ref_m_vals["in_grad"],
     ):
         mask_ref = (r_a * r_g) > 0
-        mask = (mask_ref * (x_g.sign() == r_g.sign()))
+        mask = mask_ref * (x_g.sign() == r_g.sign())
 
-        x_val = (r_g * x_a)  #clip_min_max(xg, rg) *
-        ref_val = (mask * r_g * r_a)
+        x_val = r_g * x_a  # clip_min_max(xg, rg) *
+        ref_val = mask * r_g * r_a
         vals.append((x_val, ref_val))
     return vals
 
 
-def grad_in_act_act_same_sign_masked(m , x_m_vals, ref_m_vals):
+def grad_in_act_act_same_sign_masked(m, x_m_vals, ref_m_vals):
     vals = []
     for x_a, x_g, r_a, r_g in zip(
-        x_m_vals["in_act"], x_m_vals["in_grad"],
-        ref_m_vals["in_act"], ref_m_vals["in_grad"],
+        x_m_vals["in_act"],
+        x_m_vals["in_grad"],
+        ref_m_vals["in_act"],
+        ref_m_vals["in_grad"],
     ):
         mask_ref = (r_a * r_g) > 0
-        mask = (mask_ref * (x_g.sign() == r_g.sign()))
+        mask = mask_ref * (x_g.sign() == r_g.sign())
 
-        x_val = (r_g * x_a * mask)  #clip_min_max(xg, rg) *
-        ref_val = (mask * r_g * r_a)
+        x_val = r_g * x_a * mask  # clip_min_max(xg, rg) *
+        ref_val = mask * r_g * r_a
         vals.append((x_val, ref_val))
     return vals
+
+
+def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups):
+    assert m.__class__.__name__ in [
+        "BatchNorm2d",
+        "Conv2d",
+        "Linear",
+        "ScaledStdConv2d",
+    ], f"Unsupported class {m.__class__.__name__}"
+    grad_fn = {
+        "ScaledStdConv2d": conv_grad_fn,  # conv_grad_groups,  # for now just match grad before weight scaling
+        "BatchNorm2d": bnorm_batch_grad,
+        "Conv2d": conv_grad_fn,
+        "Linear": linear_batch_grad,
+    }[m.__class__.__name__]
+
+    w_g_x_2, b_g_x_2 = grad_fn(
+        m, th.square(x_m_vals["in_act"][0]), th.square(x_m_vals["out_grad"][0])
+    )
+    w_g_r_2, b_g_r_2 = grad_fn(
+        m, th.square(ref_m_vals["in_act"][0]), th.square(ref_m_vals["out_grad"][0])
+    )
+    w_g_x_r, b_g_x_r = grad_fn(
+        m,
+        x_m_vals["in_act"][0] * ref_m_vals["in_act"][0],
+        x_m_vals["out_grad"][0] * ref_m_vals["out_grad"][0],
+    )
+
+    return (
+        (
+            (
+                w_g_x_2,
+                w_g_x_r,
+            ),
+            (w_g_r_2, w_g_x_r),
+        ),
+        (
+            (
+                b_g_x_2,
+                b_g_x_r,
+            ),
+            (b_g_r_2, b_g_x_r),
+        ),
+    )
+
+
+def cos_dist_unfolded_grads(w_x_tuple, w_r_tuple, eps):
+    (w_g_x_2, w_g_x_r) = w_x_tuple
+    (w_g_r_2, w_g_x_r) = w_r_tuple
+    cos_dist = 1 - (
+        th.sum(th.flatten(w_g_x_r, 1), 1)
+        / (
+            th.sqrt(th.sum(th.flatten(w_g_x_2, 1), 1))
+            * th.sqrt(th.sum(th.flatten(w_g_r_2, 1), 1))
+            + eps
+        )
+    )
+    return cos_dist
 
 
 def gradparam_per_batch(m, vals):
@@ -418,7 +588,6 @@ def gradparam(m, x_m_vals, ref_m_vals):
     ref_grads = gradparam_per_batch(m, ref_m_vals)
     grad_tuples = [(x_grads[key], ref_grads[key]) for key in x_grads]
     return grad_tuples
-
 
 
 def gradparam_relued(m, x_m_vals, ref_m_vals):
@@ -467,11 +636,12 @@ def clip_nonzero_max(val_func):
     def clipped_val_func(m, x_m_vals, ref_m_vals):
         x_and_ref_vals = val_func(m, x_m_vals, ref_m_vals)
         x_and_ref_vals = [
-            (th.where(ref_val > 0, th.minimum(x_val, ref_val), x_val), ref_val) for x_val, ref_val in x_and_ref_vals
+            (th.where(ref_val > 0, th.minimum(x_val, ref_val), x_val), ref_val)
+            for x_val, ref_val in x_and_ref_vals
         ]
         return x_and_ref_vals
-    return clipped_val_func
 
+    return clipped_val_func
 
 
 def gradparam_param_unfolded(m, x_m_vals, ref_m_vals):
@@ -508,21 +678,34 @@ def unfolded_w_grad_w(
     return all_grad_ws
 
 
-def compute_dist(dist_fn, val_fn,
-                 X_act_grads, ref_act_grads, ):
+def compute_dist(
+    dist_fn,
+    val_fn,
+    X_act_grads,
+    ref_act_grads,
+    flatten_before=True,
+):
     dists = []
     for m in X_act_grads:
         vals = val_fn(m, X_act_grads[m], ref_act_grads[m])
         for val_x, val_ref in vals:
-            dist = dist_fn(th.flatten(val_x, start_dim=1), th.flatten(val_ref, start_dim=1))
+            if flatten_before:
+                val_x = th.flatten(val_x, start_dim=1)
+                val_ref = th.flatten(val_ref, start_dim=1)
+            dist = dist_fn(val_x, val_ref)
+
             dists.append(dist)
     return dists
 
 
-def compute_vals(val_fn, X_act_grads, ref_act_grads, ):
-    all_vals = [val_fn(m, X_act_grads[m], ref_act_grads[m])
-                for m in X_act_grads]
+def compute_vals(
+    val_fn,
+    X_act_grads,
+    ref_act_grads,
+):
+    all_vals = [val_fn(m, X_act_grads[m], ref_act_grads[m]) for m in X_act_grads]
     return all_vals
+
 
 def compute_multiple_dists(dist_fns, val_fn, X_act_grads, ref_act_grads):
     dists_per_fn = {d_fn: [] for d_fn in dist_fns}
@@ -530,7 +713,9 @@ def compute_multiple_dists(dist_fns, val_fn, X_act_grads, ref_act_grads):
         vals = val_fn(m, X_act_grads[m], ref_act_grads[m])
         for val_x, val_ref in vals:
             for dist_fn in dist_fns:
-                dist = dist_fn(th.flatten(val_x, start_dim=1), th.flatten(val_ref, start_dim=1))
+                dist = dist_fn(
+                    th.flatten(val_x, start_dim=1), th.flatten(val_ref, start_dim=1)
+                )
                 dists_per_fn[dist_fn].append(dist)
     return dists_per_fn
 
@@ -540,13 +725,15 @@ def cosine_distance(*args, **kwargs):
 
 
 def sse_loss(x, *args, **kwargs):
-    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction='none').sum(
-        dim=tuple(range(1, len(x.shape))))
+    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction="none").sum(
+        dim=tuple(range(1, len(x.shape)))
+    )
 
 
 def mse_loss(x, *args, **kwargs):
-    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction='none').mean(
-        dim=tuple(range(1, len(x.shape))))
+    return th.nn.functional.mse_loss(x, *args, **kwargs, reduction="none").mean(
+        dim=tuple(range(1, len(x.shape)))
+    )
 
 
 def asym_cos_dist(val_x, val_ref):
@@ -564,15 +751,18 @@ def larger_magnitude_cos_dist(val_x, val_ref, *args, **kwargs):
 
 
 def normed_mse(val_x, val_ref, *args, **kwargs):
-    mses = th.nn.functional.mse_loss(val_x, val_ref, *args, **kwargs, reduction='none').mean(
-        dim=tuple(range(1, len(val_x.shape))))
+    mses = th.nn.functional.mse_loss(
+        val_x, val_ref, *args, **kwargs, reduction="none"
+    ).mean(dim=tuple(range(1, len(val_x.shape))))
     return mses / th.mean(val_ref * val_ref, dim=tuple(range(1, len(val_x.shape))))
 
 
 def detach_acts_grads(acts_grads):
     for m in acts_grads:
         for key in acts_grads[m]:
-            acts_grads[m][key] = [a.detach() if hasattr(a, 'detach') else a for a in acts_grads[m][key]]
+            acts_grads[m][key] = [
+                a.detach() if hasattr(a, "detach") else a for a in acts_grads[m][key]
+            ]
     return acts_grads
 
 
@@ -582,3 +772,250 @@ def filter_act_grads(act_grads, wanted_keys):
         if all([key in act_grads[m] for key in wanted_keys]):
             filtered[m] = act_grads[m]
     return filtered
+
+
+def update_square_and_mean_grads(
+    grads_per_module, step, mean_dict, square_dict, beta1, beta2
+):
+    with th.no_grad():
+        for m in grads_per_module:
+            grads_for_module = grads_per_module[m]
+            for k in grads_for_module:
+                new_grad = grads_for_module[k].sum(dim=0)
+                old_mean = mean_dict[getattr(m, k)]
+                assert new_grad.shape == old_mean.shape
+                old_mean.mul_(beta1).add_(
+                    new_grad,
+                    alpha=1 - beta1,
+                )
+                # old_mean.div_(1 - (beta1 ** step))
+
+                # compute estimate of squares
+                new_mean_of_squares = grads_for_module[k].square().sum(dim=0)
+                old_mean_of_squares = square_dict[getattr(m, k)]
+                assert new_mean_of_squares.shape == old_mean_of_squares.shape
+                old_mean_of_squares.mul_(beta2).add_(
+                    new_mean_of_squares,
+                    alpha=1 - beta2,
+                )
+                # old_mean_of_squares.div_(1 - (beta2 ** step))
+
+
+def compute_square_and_mean_grads_with_grad(
+    grads_per_module, step, mean_dict, square_dict, beta1, beta2
+):
+    temp_opt_state = {"simple_square": {}, "simple_mean": {}}
+    for m in grads_per_module:
+        grads_for_module = grads_per_module[m]
+        for k in grads_for_module:
+            new_grad = grads_for_module[k].sum(dim=0)
+            old_mean = mean_dict[getattr(m, k)].detach()
+            assert new_grad.shape == old_mean.shape
+            new_mean = beta1 * old_mean + (1 - beta1) * new_grad
+            # new_mean = new_mean / (1 - (beta1 ** step))
+            temp_opt_state["simple_mean"][getattr(m, k)] = new_mean
+
+            # compute estimate of squares
+            new_mean_of_squares = grads_for_module[k].square().sum(dim=0)
+            old_mean_of_squares = square_dict[getattr(m, k)].detach()
+            assert new_mean_of_squares.shape == old_mean_of_squares.shape
+            new_mean_of_squares = (
+                beta2 * old_mean_of_squares + (1 - beta2) * new_mean_of_squares
+            )
+            # new_mean_of_squares = new_mean_of_squares / (1 - (beta2 ** step))
+            temp_opt_state["simple_square"][getattr(m, k)] = new_mean_of_squares
+
+    return temp_opt_state
+
+
+def compute_grads_per_module(in_out_acts):
+    grads_per_module = dict()
+    for m in in_out_acts:
+        grads_per_module[m] = gradparam_per_batch(m, in_out_acts[m])
+    return grads_per_module
+
+
+def compute_grad_losses(
+    orig_grads_per_module,
+    simple_grads_per_module,
+    opt_state,
+    temp_opt_state,
+    beta1,
+    beta2,
+    eps,
+    divide_mean_loss_by_orig_mean=True,
+    eps_mean=1e-2,
+):
+    grad_match_losses = []
+    grad_mean_losses = []
+    for m in simple_grads_per_module:
+        simple_grads_per_key = simple_grads_per_module[m]
+        for key in simple_grads_per_key:
+            p = getattr(m, key)
+
+            orig_mean = opt_state["orig_mean"][p] / (1 - beta1 ** opt_state["step"])
+            simple_mean = temp_opt_state["simple_mean"][p] / (
+                1 - beta1 ** opt_state["step"]
+            )
+            grad_mean_loss = th.square(orig_mean - simple_mean).sum()
+            if divide_mean_loss_by_orig_mean:
+                grad_mean_loss = grad_mean_loss / (orig_mean.square().sum() + eps_mean)
+            grad_mean_losses.append(grad_mean_loss)
+
+            orig_grads = orig_grads_per_module[m][key]
+            simple_grads = simple_grads_per_key[key]
+            assert orig_grads.shape == simple_grads.shape
+            orig_square = opt_state["orig_square"][p] / (1 - beta2 ** opt_state["step"])
+            simple_square = temp_opt_state["simple_square"][p] / (
+                1 - beta2 ** opt_state["step"]
+            )
+            # now similar to cos dist
+            renormed_orig_grads = orig_grads / th.sqrt(orig_square.unsqueeze(0) + eps)
+            renormed_simple_grads = simple_grads / th.sqrt(
+                simple_square.unsqueeze(0) + eps
+            )
+            grad_match_loss = (
+                th.sum(
+                    th.square(renormed_orig_grads - renormed_simple_grads), dim=0
+                ).mean()
+                / 2
+            )
+            grad_match_losses.append(grad_match_loss)
+    return grad_mean_losses, grad_match_losses
+
+
+def compute_grad_losses_learned_square_fraction(
+    orig_grads_per_module,
+    simple_grads_per_module,
+    opt_state,
+    learned_square_alphas,
+    beta1,
+    beta2,
+    eps,
+    divide_mean_loss_by_orig_mean=True,
+    eps_mean=1e-2,
+):
+    grad_match_losses = []
+    grad_mean_losses = []
+    for m in simple_grads_per_module:
+        simple_grads_per_key = simple_grads_per_module[m]
+        for key in simple_grads_per_key:
+            p = getattr(m, key)
+            square_fraction = learned_square_alphas[p]
+            orig_mean = opt_state["orig_mean"][p] / (1 - beta1 ** opt_state["step"])
+            simple_mean = square_fraction * orig_mean
+            grad_mean_loss = th.square(orig_mean - simple_mean).sum()
+            if divide_mean_loss_by_orig_mean:
+                grad_mean_loss = grad_mean_loss / (orig_mean.square().sum() + eps_mean)
+            grad_mean_losses.append(grad_mean_loss)
+
+            orig_grads = orig_grads_per_module[m][key]
+            simple_grads = simple_grads_per_key[key]
+            assert orig_grads.shape == simple_grads.shape
+            orig_square = opt_state["orig_square"][p] / (1 - beta2 ** opt_state["step"])
+            simple_square = orig_square * square_fraction
+            # now similar to cos dist
+            renormed_orig_grads = orig_grads / th.sqrt(orig_square.unsqueeze(0) + eps)
+            renormed_simple_grads = simple_grads / th.sqrt(
+                simple_square.unsqueeze(0) + eps
+            )
+            grad_match_loss = (
+                th.sum(
+                    th.square(renormed_orig_grads - renormed_simple_grads), dim=0
+                ).mean()
+                / 2
+            )
+            grad_match_losses.append(grad_match_loss)
+    return grad_mean_losses, grad_match_losses
+
+
+def compute_grad_losses_learned_square(
+    orig_grads_per_module,
+    simple_grads_per_module,
+    opt_state,
+    learned_square_alphas,
+    beta1,
+    beta2,
+    eps,
+    divide_mean_loss_by_orig_mean=True,
+    eps_mean=1e-2,
+):
+    grad_match_losses = []
+    grad_mean_losses = []
+    for m in simple_grads_per_module:
+        simple_grads_per_key = simple_grads_per_module[m]
+        for key in simple_grads_per_key:
+            p = getattr(m, key)
+            orig_square = opt_state["orig_square"][p] / (1 - beta2 ** opt_state["step"])
+            square_fraction = th.square(learned_square_alphas[p]) / orig_square
+            orig_mean = opt_state["orig_mean"][p] / (1 - beta1 ** opt_state["step"])
+            simple_mean = square_fraction * orig_mean
+            grad_mean_loss = th.square(orig_mean - simple_mean).sum()
+            if divide_mean_loss_by_orig_mean:
+                grad_mean_loss = grad_mean_loss / (orig_mean.square().sum() + eps_mean)
+            grad_mean_losses.append(grad_mean_loss)
+
+            orig_grads = orig_grads_per_module[m][key]
+            simple_grads = simple_grads_per_key[key]
+            assert orig_grads.shape == simple_grads.shape
+            simple_square = orig_square * square_fraction
+            # now similar to cos dist
+            renormed_orig_grads = orig_grads / th.sqrt(orig_square.unsqueeze(0) + eps)
+            renormed_simple_grads = simple_grads / th.sqrt(
+                simple_square.unsqueeze(0) + eps
+            )
+            grad_match_loss = (
+                th.sum(
+                    th.square(renormed_orig_grads - renormed_simple_grads), dim=0
+                ).mean()
+                / 2
+            )
+            grad_match_losses.append(grad_match_loss)
+    return grad_mean_losses, grad_match_losses
+
+
+def compute_grad_losses_simple_square(
+    orig_grads_per_module,
+    simple_grads_per_module,
+    opt_state,
+    temp_opt_state,
+    beta1,
+    beta2,
+    eps,
+    divide_mean_loss_by_orig_mean=True,
+    eps_mean=1e-2,
+):
+    grad_match_losses = []
+    grad_mean_losses = []
+    for m in simple_grads_per_module:
+        simple_grads_per_key = simple_grads_per_module[m]
+        for key in simple_grads_per_key:
+            p = getattr(m, key)
+            orig_square = opt_state["orig_square"][p] / (1 - beta2 ** opt_state["step"])
+            simple_square = temp_opt_state["simple_square"][p] / (
+                1 - beta2 ** opt_state["step"]
+            )
+            square_fraction = simple_square / orig_square
+            orig_mean = opt_state["orig_mean"][p] / (1 - beta1 ** opt_state["step"])
+            simple_mean = square_fraction * orig_mean
+            grad_mean_loss = th.square(orig_mean - simple_mean).sum()
+            if divide_mean_loss_by_orig_mean:
+                grad_mean_loss = grad_mean_loss / (orig_mean.square().sum() + eps_mean)
+            grad_mean_losses.append(grad_mean_loss)
+
+            orig_grads = orig_grads_per_module[m][key]
+            simple_grads = simple_grads_per_key[key]
+            assert orig_grads.shape == simple_grads.shape
+            # now similar to cos dist
+            renormed_orig_grads = orig_grads / th.sqrt(orig_square.unsqueeze(0) + eps)
+            renormed_simple_grads = simple_grads / th.sqrt(
+                simple_square.unsqueeze(0) + eps
+            )
+            grad_match_loss = (
+                th.sum(
+                    th.square(renormed_orig_grads - renormed_simple_grads), dim=0
+                ).mean()
+                / 2
+            )
+            grad_match_losses.append(grad_match_loss)
+    return grad_mean_losses, grad_match_losses
