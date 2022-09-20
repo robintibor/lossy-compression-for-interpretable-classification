@@ -1,43 +1,46 @@
+import itertools
+import json
+import logging
 import os.path
 import sys
+from functools import partial
 from itertools import islice
 
+import higher
 import kornia
 import numpy as np
 import torch
 import torch as th
-from lossy.modules import Expression
-from lossy.util import set_random_seeds
 from tensorboardX.writer import SummaryWriter
 from torch import nn
 from torchvision.utils import save_image
 
-import higher
+from lossy import wide_nf_net, data_locations
+from lossy.activation_match import add_conv_bias_grad
+from lossy.activation_match import compute_dist
+from lossy.activation_match import conv_weight_grad_loop
+from lossy.activation_match import cos_dist_unfolded_grads
+from lossy.activation_match import cosine_distance
+from lossy.activation_match import detach_acts_grads
+from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
+from lossy.activation_match import grad_in_act_act
+from lossy.activation_match import refed
+from lossy.activation_match import unfolded_grads
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
 from lossy.datasets import get_dataset
 from lossy.glow import load_small_glow
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
-from lossy.image_convert import img_0_1_to_glow_img, quantize_data
-from lossy.util import weighted_sum
-from lossy.optim import grads_all_finite
-from lossy.util import np_to_th, th_to_np
-from lossy.wide_nf_net import activation_fn
-import logging
-import json
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
-from lossy.activation_match import relu_match, refed, relued
-from lossy.activation_match import grad_in_act_act
+from lossy.image_convert import img_0_1_to_glow_img, quantize_data
+from lossy.modules import Expression
+from lossy.optim import grads_all_finite
 from lossy.optim import set_grads_to_none
-from lossy.activation_match import cosine_distance
-from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
-from lossy.activation_match import compute_dist
-from lossy.activation_match import detach_acts_grads
-import itertools
-
-
-from lossy import wide_nf_net, data_locations
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
+from lossy.util import np_to_th, th_to_np
+from lossy.util import set_random_seeds
+from lossy.util import weighted_sum
+from lossy.wide_nf_net import activation_fn
 
 log = logging.getLogger(__name__)
 
@@ -221,7 +224,7 @@ def run_exp(
     ssl_loss_factor,
     train_ssl_orig_simple,
     activation,
-    grad_act_match,
+    loss_name,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
     if saved_model_folder is not None:
@@ -400,16 +403,26 @@ def run_exp(
 
     print("clf", clf)
     log.info("Start training...")
-    if grad_act_match:
+    if loss_name == 'grad_act_match':
         use_parameter_counts = True
+        val_fn = refed(grad_in_act_act, "in_grad")
+        dist_fn = cosine_distance
+        flatten_before_dist = True
+    elif loss_name == 'unfolded_grad_match':
+        use_parameter_counts = False
+        conv_grad_fn = add_conv_bias_grad(conv_weight_grad_loop)
+        val_fn = refed(partial(unfolded_grads, conv_grad_fn=conv_grad_fn), 'out_grad')
+        dist_fn = partial(cos_dist_unfolded_grads, eps=1e-10)
+        flatten_before_dist = False
+
+    if loss_name in ['grad_act_match', 'unfolded_grad_match']:
         wanted_modules = []
         wanted_names = []
         for name, module in clf.named_modules():
             if len(list(module.parameters(recurse=False))) > 0:
                 wanted_modules.append(module)
                 wanted_names.append(name)
-        val_fn = refed(grad_in_act_act, "in_grad")
-        dist_fn = cosine_distance
+
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
             clf.train()
@@ -431,7 +444,7 @@ def run_exp(
             # just match them damn gradients
             #
 
-            if grad_act_match:
+            if loss_name in ['grad_act_match', 'unfolded_grad_match']:
                 loss_fn = lambda o: th.nn.functional.cross_entropy(o, y)
                 orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
                     clf, X_aug, loss_fn, wanted_modules=wanted_modules
@@ -458,6 +471,7 @@ def run_exp(
                     val_fn,
                     simple_acts_grads,
                     orig_acts_grads,
+                    flatten_before=flatten_before_dist
                 )
 
                 dists = torch.mean(torch.stack(dists_per_example), dim=1)
@@ -479,8 +493,8 @@ def run_exp(
 
             else:
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
-                    f_clf,
-                    f_opt_clf,
+                        f_clf,
+                        f_opt_clf,
                 ):
                     random_state = torch.get_rng_state()
                     f_simple_out = f_clf(simple_X_aug)
@@ -500,7 +514,7 @@ def run_exp(
                 )
                 f_orig_loss = th.mean(f_orig_loss_per_ex)
                 bpd_factors = (
-                    (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
+                        (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
                 ).detach()
 
             bpd = get_bpd(gen, simple_X)
@@ -523,9 +537,10 @@ def run_exp(
                 opt_preproc.step()
             opt_preproc.zero_grad(set_to_none=True)
 
-            if grad_act_match:
+            if loss_name in ['grad_act_match', 'unfolded_grad_match']:
                 restore_grads_from(clf.parameters(), "grad_tmp")
             else:
+                assert loss_name == 'one_step'
                 # Classifier training
                 if resample_augmentation_for_clf:
                     aug_m = get_aug_m(
@@ -556,14 +571,14 @@ def run_exp(
                     z2 = clf[1].compute_features(clf[0](X2))
                     simclr_loss = compute_nt_xent_loss(z1, z2)
                     clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
-                        1 + ssl_loss_factor
+                            1 + ssl_loss_factor
                     )
 
                 if train_ssl_orig_simple:
                     z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
                     ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
                     clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
-                        1 + ssl_loss_factor
+                            1 + ssl_loss_factor
                     )
 
                 opt_clf.zero_grad(set_to_none=True)
@@ -587,8 +602,8 @@ def run_exp(
         with torch.no_grad():
             for with_preproc in [True, False]:
                 for set_name, loader in (
-                    ("train", train_det_loader),
-                    ("test", testloader),
+                        ("train", train_det_loader),
+                        ("test", testloader),
                 ):
                     all_preds = []
                     all_ys = []
