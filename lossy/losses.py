@@ -1,5 +1,17 @@
 import torch as th
 
+def grad_normed_loss(unnormed_loss_fn, eps=1e-10):
+    def normed_loss_fn(out):
+        out_with_grad = out.detach().requires_grad_(True)
+        unnormed_loss = unnormed_loss_fn(out_with_grad).mean()
+        grads = th.autograd.grad(unnormed_loss, out_with_grad)[0]
+        factors = 1 / (th.norm(grads, p=1, dim=1,) + eps)
+        losses = unnormed_loss_fn(out)
+        assert factors.shape == losses.shape
+        loss = th.mean(losses * factors)
+        return loss
+    return normed_loss_fn
+
 def kl_divergence(clf_out_a, clf_out_b, reduction='mean'):
     assert clf_out_a.shape == clf_out_b.shape
     kl_divs_per_example = th.sum(

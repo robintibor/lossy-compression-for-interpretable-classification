@@ -98,7 +98,41 @@ def get_dataset(
     i_classes=None,
     mimic_cxr_clip=1.0,  # Clip MIMIC CXR Brightness?
     mimic_cxr_target=None,
+    reverse=False,
+    stripes_factor=0.15,
 ):
+    if dataset.lower() in [
+        "mnist_fashion",
+        "stripes",
+        "mnist_cifar",
+    ]:
+        from lossy.toy_datasets import load_dataset
+        (
+            num_classes,
+            trainloader,
+            train_det_loader,
+            testloader,
+        ) = load_dataset(
+            dataset_name=dataset.lower(),
+            data_path=data_path,
+            reverse=reverse,
+            first_n=first_n,
+            split_test_off_train=split_test_off_train,
+            batch_size=batch_size,
+            stripes_factor=stripes_factor,
+        )
+        channel = 3
+        im_size = (32, 32)
+        class_names = None # ignore
+        return (
+            channel,
+            im_size,
+            num_classes,
+            class_names,
+            trainloader,
+            train_det_loader,
+            testloader,
+        )
     assert not standardize
     if dataset == "MNIST":
         channel = 3

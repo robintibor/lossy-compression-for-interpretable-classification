@@ -8,6 +8,17 @@ from typing import List
 from torch import Tensor
 import torch.nn.functional as F
 
+
+def restore_grads_from(params, fieldname):
+    for p in params:
+        p.grad = getattr(p, fieldname)  # .detach().clone()
+        delattr(p, fieldname)
+
+
+def save_grads_to(params, fieldname):
+    for p in params:
+        setattr(p, fieldname, p.grad.detach().clone())
+
 # https://github.com/f-dangel/backpack/blob/1da7e53ebb2c490e2b7dd9f79116583641f3cca1/backpack/utils/subsampling.py
 def subsample(tensor: Tensor, dim: int = 0, subsampling: List[int] = None) -> Tensor:
     """Select samples from a tensor along a dimension.
@@ -125,7 +136,7 @@ def get_in_out_acts_and_in_out_grads_per_module(
     return module_to_vals
 
 
-def get_in_out_activations_per_module(net, X, wanted_modules=None, **backward_kwargs):
+def get_in_out_activations_per_module(net, X, wanted_modules=None,):
     if wanted_modules is None:
         wanted_modules = net.modules()
 
@@ -174,6 +185,47 @@ def conv_grad_groups(module, in_act, out_grad):
     return weight_bgrad, bias_bgrad
 
 
+def scaled_conv_grad(module, in_act, out_grad,):
+    grad_on_computed_weight, grad_on_bias = conv_batch_grad(module, in_act, out_grad)
+    grad_weight_before_gain = grad_on_computed_weight.squeeze(0) * module.gain
+    grad_weight_before_scale = grad_weight_before_gain * module.scale
+    grad_weight_before_mean = grad_weight_before_scale - th.mean(
+        grad_weight_before_scale, dim=(2, 3, 4), keepdim=True
+    )
+
+    # Account for std transformation
+    grad_outer_w = grad_weight_before_mean
+    eps = module.eps
+    w = module.weight
+    n_params_per_w = np.prod(w.shape[1:])
+    flat_w = th.flatten(w, start_dim=1)
+    n_x = len(grad_outer_w)
+    grad_outer_w_flat = th.flatten(grad_outer_w, start_dim=2)
+    std = th.std(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
+    grad_w_s = (
+            0.5
+            * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True))
+            / (n_params_per_w * th.sqrt(std * std))
+    )
+    grad_w_1_div_s = -(1 / ((std + eps) * (std + eps))) * grad_w_s
+    grad_w_1_div_s_flat = th.flatten(grad_w_1_div_s, start_dim=1)
+
+    # unsqueeze(0) for example dim
+    grad_on_factor_per_w_p = grad_outer_w_flat * flat_w.unsqueeze(0)
+
+    grad_on_w_through_std = (
+            grad_on_factor_per_w_p.sum(dim=2, keepdim=True) * grad_w_1_div_s_flat
+    ).reshape(n_x, *w.shape)
+
+    grad_on_w_direct = grad_outer_w * (1 / (std.unsqueeze(0) + eps))
+    grad_weight = grad_on_w_direct + grad_on_w_through_std
+
+    computed_weight_before_gain = module.get_weight() / module.gain
+    grad_gain = grad_on_computed_weight.squeeze(0) * computed_weight_before_gain
+    grad_gain = th.sum(grad_gain, dim=(2, 3, 4), keepdim=True)
+    return grad_weight, grad_on_bias, grad_gain
+
+
 # https://github.com/owkin/grad-cnns/blob/b0a9e3bb16f6a2358d3d8e9c936d8d308a648476/code/gradcnn/crb_backward.py#L25
 def conv_backward(
     input,
@@ -201,6 +253,13 @@ def conv_backward(
         dilation = (dilation,) * nd
     if isinstance(padding, int):
         padding = (padding,) * nd
+    if isinstance(padding, str):
+        if padding == 'same':
+            padding = tuple(np.array(kernel_size) // 2)
+        elif padding == 'valid':
+            padding (0,) * nd
+        else:
+            raise ValueError(f"Unknown padding {padding:s}")
 
     # Get some useful sizes
     batch_size = input.size(0)
@@ -255,7 +314,7 @@ def conv_backward(
 
 
 def conv_batch_grad(module, in_act, out_grad):
-    assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
+    #assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
     # recreated_weight_batch_grad = th.nn.functional.conv2d(
     #     in_act.view(-1, 1, *in_act.shape[2:]),
     #     out_grad.view(-1, 1, *out_grad.shape[2:]),
@@ -273,13 +332,14 @@ def conv_batch_grad(module, in_act, out_grad):
     # # n_out_before_stride = np.array(in_act.shape[2:]) - (
     # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
     # # n_removed_by_stride =
-    # wieght_batch_grad = conv_weight_grad_loop(
-    #    module, in_act, out_grad
-    # )  # conv_weight_grad_backpack(module, in_act, out_grad)
+    weight_batch_grad = conv_weight_grad_loop(
+        module, in_act, out_grad
+    )  # conv_weight_grad_backpack(module, in_act, out_grad)
 
-    # bias_batch_grad = out_grad.sum(dim=(-2, -1))
-    wieght_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
-    return wieght_batch_grad, bias_batch_grad
+    bias_batch_grad = out_grad.sum(dim=(-2, -1))
+    #print("hi")
+    #weight_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
+    return weight_batch_grad, bias_batch_grad
 
 
 def add_conv_bias_grad(conv_weight_grad_fn):
@@ -345,20 +405,27 @@ def conv_weight_grad_backpack(module, in_act, out_grad):
 
 
 def conv_weight_grad_loop(module, in_act, out_grad):
-    grads = []
-    for i_ex in range(len(in_act)):
-        grad = conv_weight_grad(
+    grads = [conv_weight_grad(
             module, in_act[i_ex : i_ex + 1], out_grad[i_ex : i_ex + 1]
-        )
-        grads.append(grad)
+        ) for i_ex in range(len(in_act))]
     return th.stack(grads)
 
 
 def conv_weight_grad(module, in_act, out_grad):
+    padding = module.padding
+    if isinstance(padding, int):
+        padding = (padding,) * (in_act.ndim - 2)
+    if isinstance(padding, str):
+        if padding == 'same':
+            padding = tuple(np.array(module.kernel_size) // 2)
+        elif padding == 'valid':
+            padding (0,) *  (in_act.ndim - 2)
+        else:
+            raise ValueError(f"Unknown padding {padding:s}")
     recreated_weight_grad = th.nn.functional.conv2d(
         in_act.transpose(0, 1),
         out_grad.transpose(0, 1),
-        padding=module.padding,
+        padding=padding,
         dilation=module.stride,
     )
     reshaped_weight_grad = recreated_weight_grad.transpose(0, 1)
@@ -505,7 +572,7 @@ def grad_in_act_act_same_sign_masked(m, x_m_vals, ref_m_vals):
     return vals
 
 
-def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups):
+def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups, renorm_grads=False):
     assert m.__class__.__name__ in [
         "BatchNorm2d",
         "Conv2d",
@@ -519,16 +586,28 @@ def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups):
         "Linear": linear_batch_grad,
     }[m.__class__.__name__]
 
+    eps = 1e-20
+    ref_square_grads = th.square(ref_m_vals["out_grad"][0])
+    sum_squared_out_grads = th.sum(
+        ref_square_grads, dim=tuple(range(1, ref_square_grads.ndim)), keepdim=True) + eps
+    ref_out_grads = ref_m_vals["out_grad"][0]
+    simple_out_grads = x_m_vals["out_grad"][0]
+    if renorm_grads:
+        ref_out_grads = ref_out_grads / th.sqrt(sum_squared_out_grads)
+        simple_out_grads = simple_out_grads / th.sqrt(sum_squared_out_grads)
+        ref_square_grads = ref_square_grads / sum_squared_out_grads
+
+
     w_g_x_2, b_g_x_2 = grad_fn(
-        m, th.square(x_m_vals["in_act"][0]), th.square(x_m_vals["out_grad"][0])
+        m, th.square(x_m_vals["in_act"][0]), th.square(simple_out_grads)
     )
     w_g_r_2, b_g_r_2 = grad_fn(
-        m, th.square(ref_m_vals["in_act"][0]), th.square(ref_m_vals["out_grad"][0])
+        m, th.square(ref_m_vals["in_act"][0]), ref_square_grads
     )
     w_g_x_r, b_g_x_r = grad_fn(
         m,
         x_m_vals["in_act"][0] * ref_m_vals["in_act"][0],
-        x_m_vals["out_grad"][0] * ref_m_vals["out_grad"][0],
+        simple_out_grads * ref_out_grads,
     )
 
     return (
@@ -564,21 +643,25 @@ def cos_dist_unfolded_grads(w_x_tuple, w_r_tuple, eps):
 
 
 def gradparam_per_batch(m, vals):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear", "ScaledStdConv2d"]
     grad_fn = {
         "BatchNorm2d": bnorm_batch_grad,
         "Conv2d": conv_batch_grad,
         "Linear": linear_batch_grad,
+        "ScaledStdConv2d": scaled_conv_grad,
     }[m.__class__.__name__]
 
-    weight_batch_grad, bias_batch_grad = grad_fn(
+    grad_tuple = grad_fn(
         m, vals["in_act"][0], vals["out_grad"][0]
     )
+    assert len(grad_tuple) in [2,3]
     grads = {}
     if m.weight is not None:
-        grads["weight"] = weight_batch_grad
+        grads["weight"] = grad_tuple[0]
     if m.bias is not None:
-        grads["bias"] = bias_batch_grad
+        grads["bias"] = grad_tuple[1]
+    if hasattr(m, 'gain') and m.gain is not None:
+        grads["gain"] = grad_tuple[2]
     return grads
 
 

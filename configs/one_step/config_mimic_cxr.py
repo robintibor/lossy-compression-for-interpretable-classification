@@ -1,3 +1,5 @@
+# PARENTCONFIG: /home/schirrmr/code/lossy/configs/one_step/config.py
+
 import os
 
 os.sys.path.insert(0, "/home/schirrmr/code/utils/")
@@ -32,7 +34,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/mimic-cxr/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -61,10 +63,10 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
+        'dataset': ['mimic-cxr' ],#, 'mnist', 'fashionmnist', 'svhn'],
+        'mimic_cxr_target': ['pleural_effusion'],
         #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
-        'mimic_cxr_target': [None],
     })
 
     train_params = dictlistprod(
@@ -76,8 +78,8 @@ def get_grid_param_list():
             "train_simclr_orig": [False],
             "train_ssl_orig_simple": [False],
             "ssl_loss_factor": [None],
-            "loss_name": ['unfolded_grad_match', "grad_act_match"],
-            "grad_from_orig": [False],
+            "loss_name": ['unfolded_grad_match'],
+            "grad_from_orig": [True],
         }
     )
 
@@ -89,12 +91,6 @@ def get_grid_param_list():
     ]
 
     quantize_params = [
-    #     {
-    #     "noise_after_simplifier": False,
-    #     "noise_before_generator": True,
-    #     "np_th_seed": 0,
-    #     'quantize_after_simplifier': True,
-    # },
         {
             "noise_after_simplifier": True,
             "noise_before_generator": False,
@@ -103,19 +99,6 @@ def get_grid_param_list():
         }
     ]
 
-    # quantize_params = dictlistprod(
-    #     {
-    #         "np_th_seed": range(1),
-    #         #"np_th_seed": [0],
-    #         'quantize_after_simplifier': [True,False],
-    #     }
-    # ) + dictlistprod(
-    #     {
-    #         "np_th_seed": range(1,3),
-    #         #"np_th_seed": [0],
-    #         'quantize_after_simplifier': [True,],
-    #     }
-    # )
 
     random_params = dictlistprod(
         {
@@ -151,7 +134,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0,1,2,4,8],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [0,1,2,4,],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 
@@ -174,85 +157,3 @@ def get_grid_param_list():
 
 def sample_config_params(rng, params):
     return params
-
-
-def run(
-    ex,
-    n_epochs,
-    optim_type,
-    n_start_filters,
-    residual_preproc,
-    lr_preproc,
-    lr_clf,
-    threshold,
-    bpd_weight,
-    model_name,
-    np_th_seed,
-    batch_size,
-    weight_decay,
-    adjust_betas,
-    saved_model_folder,
-    train_orig,
-    dataset,
-    debug,
-    save_models,
-    noise_before_generator,
-    noise_after_simplifier,
-    noise_augment_level,
-    depth,
-    widen_factor,
-    trivial_augment,
-    resample_augmentation,
-    resample_augmentation_for_clf,
-    std_aug_magnitude,
-    extra_augs,
-    quantize_after_simplifier,
-    train_simclr_orig,
-    ssl_loss_factor,
-    train_ssl_orig_simple,
-    activation,
-    loss_name,
-    grad_from_orig,
-    mimic_cxr_target,
-):
-    if debug:
-        n_epochs = 3
-        first_n = 1024
-        save_models = False
-    else:
-        first_n = None
-    kwargs = locals()
-    kwargs.pop("ex")
-    kwargs.pop("debug")
-    if not debug:
-        log.setLevel("INFO")
-    file_obs = ex.observers[0]
-    output_dir = file_obs.dir
-    kwargs["output_dir"] = output_dir
-    th.backends.cudnn.benchmark = True
-    import sys
-
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)s : %(message)s",
-        level=logging.DEBUG,
-        stream=sys.stdout,
-    )
-    start_time = time.time()
-    ex.info["finished"] = False
-
-    import os
-    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
-    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
-    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
-    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-
-    from lossy.experiments.one_step.run import run_exp
-
-    results = run_exp(**kwargs)
-    end_time = time.time()
-    run_time = end_time - start_time
-    ex.info["finished"] = True
-
-    for key, val in results.items():
-        ex.info[key] = float(val)
-    ex.info["runtime"] = run_time

@@ -62,12 +62,12 @@ def get_grid_param_list():
     # saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
     #      _cl                for exp_id in exp_ids]
 
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/grad-act-match/'#'/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/'
+    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/'#'/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/'
     df = load_data_frame(parent_exp_folder)
     df = df[df.debug == False]
     df = df[df.finished == True]
 
-    df = df[df.activation == "shifted_softplus_1"]
+    #df = df[df.activation == "shifted_softplus_1"]
 
 
     exp_ids = df.index
