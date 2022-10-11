@@ -674,7 +674,7 @@ def gradparam(m, x_m_vals, ref_m_vals):
 
 
 def gradparam_relued(m, x_m_vals, ref_m_vals):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    assert m.__class__.__name__ in ["ScaledStdConv2d", "BatchNorm2d", "Conv2d", "Linear"]
     x_grads = gradparam_per_batch(m, x_m_vals)
     ref_grads = gradparam_per_batch(m, ref_m_vals)
 
@@ -690,7 +690,7 @@ def gradparam_relued(m, x_m_vals, ref_m_vals):
 
 
 def gradparam_param(m, x_m_vals, ref_m_vals):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear"]
+    assert m.__class__.__name__ in ["ScaledStdConv2d", "BatchNorm2d", "Conv2d", "Linear"]
     x_grads = gradparam_per_batch(m, x_m_vals)
     ref_grads = gradparam_per_batch(m, ref_m_vals)
 
@@ -767,17 +767,40 @@ def compute_dist(
     X_act_grads,
     ref_act_grads,
     flatten_before=True,
+    per_module=False,
+    all_concatenated=False,
+
 ):
+    per_val = (not per_module) and (not all_concatenated)
     dists = []
+    val_x_all = []
+    val_ref_all = []
     for m in X_act_grads:
         vals = val_fn(m, X_act_grads[m], ref_act_grads[m])
+        val_x_for_module = []
+        val_ref_for_module = []
         for val_x, val_ref in vals:
             if flatten_before:
                 val_x = th.flatten(val_x, start_dim=1)
                 val_ref = th.flatten(val_ref, start_dim=1)
-            dist = dist_fn(val_x, val_ref)
-
+            if per_val:
+                dist = dist_fn(val_x, val_ref)
+                dists.append(dist)
+            if per_module:
+                val_x_for_module.append(val_x)
+                val_ref_for_module.append(val_ref)
+            if all_concatenated:
+                val_x_all.append(val_x)
+                val_ref_all.append(val_ref)
+        if per_module:
+            dist = dist_fn(th.cat(val_x_for_module, dim=1),
+                           th.cat(val_ref_for_module, dim=1))
             dists.append(dist)
+    if all_concatenated:
+        dist = dist_fn(th.cat(val_x_all, dim=1),
+                       th.cat(val_ref_all, dim=1))
+        dists.append(dist)
+
     return dists
 
 
@@ -817,6 +840,10 @@ def mse_loss(x, *args, **kwargs):
     return th.nn.functional.mse_loss(x, *args, **kwargs, reduction="none").mean(
         dim=tuple(range(1, len(x.shape)))
     )
+
+
+def l1_dist(a,b,):
+    return th.sum(th.abs(a - b), dim=tuple(range(1, len(a.shape))))
 
 
 def asym_cos_dist(val_x, val_ref):

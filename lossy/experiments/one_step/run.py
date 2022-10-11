@@ -27,7 +27,7 @@ from lossy.activation_match import detach_acts_grads
 from lossy.activation_match import get_in_out_activations_per_module
 from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
 from lossy.activation_match import grad_in_act_act
-from lossy.activation_match import gradparam_per_batch
+from lossy.activation_match import gradparam_param
 from lossy.activation_match import refed
 from lossy.activation_match import unfolded_grads
 from lossy.affine import AffineOnChans
@@ -247,6 +247,7 @@ def run_exp(
     mimic_cxr_target,
     use_normed_loss,
     separate_orig_clf,
+    add_simple_to_orig_pred_loss,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
     if saved_model_folder is not None:
@@ -439,7 +440,7 @@ def run_exp(
         val_fn = grad_in_act_act
         if grad_from_orig:
             val_fn = refed(val_fn, "in_grad")
-        dist_fn = cosine_distance
+        dist_fn = partial(cosine_distance, eps=1e-15)
         flatten_before_dist = True
     elif loss_name == "unfolded_grad_match":
         use_parameter_counts = False
@@ -449,6 +450,13 @@ def run_exp(
             val_fn = refed(val_fn, "out_grad")
         dist_fn = partial(cos_dist_unfolded_grads, eps=1e-10)
         flatten_before_dist = False
+    elif loss_name == "gradparam_param":
+        use_parameter_counts = False
+        val_fn = gradparam_param
+        if grad_from_orig:
+            val_fn = refed(val_fn, "out_grad")
+        dist_fn = partial(cosine_distance, eps=1e-15)
+        flatten_before_dist = True
 
     if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]:
         if separate_orig_clf:
@@ -491,14 +499,15 @@ def run_exp(
 
             if loss_name in ["grad_act_match", "unfolded_grad_match",
                              "gradparam_param"]:
-                random_state = torch.get_rng_state()
                 loss_fn = lambda o: th.nn.functional.cross_entropy(
                     o, y, reduction='none')
                 if use_normed_loss:
                     loss_fn = grad_normed_loss(loss_fn)
                 else:
-                    loss_fn = lambda o: th.mean(loss_fn(o))
+                    unmeaned_loss_fn = loss_fn
+                    loss_fn = lambda o: th.mean(unmeaned_loss_fn(o))
 
+                random_state = torch.get_rng_state()
                 orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
                     clf_for_comparisons, X_aug, loss_fn, wanted_modules=wanted_modules
                 )
@@ -506,14 +515,14 @@ def run_exp(
 
                 set_grads_to_none(clf_for_comparisons.parameters())
 
+                torch.set_rng_state(random_state)
                 if grad_from_orig:
                     simple_acts_grads = get_in_out_activations_per_module(
                         clf_for_comparisons,
                         simple_X_aug,
                         wanted_modules=wanted_modules,
                     )
-                    if loss_name in ["grad_act_match", "unfolded_grad_match"] and (
-                            not separate_orig_clf):
+                    if (not separate_orig_clf) and (not use_normed_loss):
 
                         # Compute and store gradients for classifier update
                         # loss = loss_fn(simple_acts_grads[wanted_modules[-1]]["out_act"][0])
@@ -532,14 +541,13 @@ def run_exp(
                         create_graph=True,
                     )
 
-                if loss_name in ["grad_act_match", "unfolded_grad_match"] and (
-                        not separate_orig_clf):
+                if (not separate_orig_clf) and (not use_normed_loss):
                     save_grads_to(clf.parameters(), "grad_tmp")
+                set_grads_to_none(clf_for_comparisons.parameters())
                 set_grads_to_none(clf.parameters())
                 set_grads_to_none(preproc.parameters())
                 set_grads_to_none([X])
 
-            if loss_name in ["grad_act_match", "unfolded_grad_match"]:
                 dists_per_example = compute_dist(
                     dist_fn,
                     val_fn,
@@ -560,38 +568,16 @@ def run_exp(
                 task_loss = weighted_sum(
                     len(dists), *list(itertools.chain(*list(zip(p_counts, dists))))
                 )
-                f_simple_loss_before = th.zeros_like(task_loss)
+                if add_simple_to_orig_pred_loss:
+                    simple_to_orig_loss = kl_divergence(
+                        orig_acts_grads[wanted_modules[-1]]['out_act'][0].detach(),
+                        simple_acts_grads[wanted_modules[-1]]['out_act'][0])
+                else:
+                    simple_to_orig_loss = th.zeros_like(task_loss)
+                f_simple_loss_before = simple_to_orig_loss
                 f_simple_loss = task_loss
                 f_orig_loss = th.zeros_like(f_simple_loss)
                 bpd_factors = th.ones_like(X[:, 0, 0, 0])
-            elif loss_name == 'gradparam_param':
-                if grad_from_orig:
-                    for m in simple_acts_grads:
-                        simple_acts_grads[m]['out_grad'] = orig_acts_grads[m]['out_grad']  # .detach()
-
-                simple_to_orig_loss = kl_divergence(
-                    orig_acts_grads[wanted_modules[-1]]['out_act'][0].detach(),
-                    simple_acts_grads[wanted_modules[-1]]['out_act'][0])
-
-                simple_orig_diffs = []
-                for module in orig_acts_grads:
-                    orig_grads = gradparam_per_batch(module, orig_acts_grads[module])
-                    simple_grads = gradparam_per_batch(module, simple_acts_grads[module])
-                    module_diffs = []
-                    for key in orig_grads:
-                        param = getattr(module, key)
-                        diffs = th.abs(param.unsqueeze(0)) * th.abs(orig_grads[key] - simple_grads[key])
-                        module_diffs.append(th.sum(diffs, dim=list(range(1, diffs.ndim))).mean())  # mean over examples
-                    simple_orig_diffs.append(sum(module_diffs))
-
-                simple_orig_diff_loss = sum(simple_orig_diffs)
-
-                # slightly random assignment of loss names here now
-                f_simple_loss_before = simple_to_orig_loss
-                f_simple_loss = simple_orig_diff_loss
-                f_orig_loss = th.zeros_like(f_simple_loss)
-                bpd_factors = th.ones_like(X[:, 0, 0, 0])
-
             else:
                 assert loss_name == 'one_step'
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
@@ -639,8 +625,8 @@ def run_exp(
                 opt_preproc.step()
             opt_preproc.zero_grad(set_to_none=True)
 
-            if loss_name in ["grad_act_match", "unfolded_grad_match"] and (
-                    not separate_orig_clf):
+            if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param"] and (
+                    not separate_orig_clf) and (not use_normed_loss):
                 restore_grads_from(clf.parameters(), "grad_tmp")
             else:
                 # Classifier training
