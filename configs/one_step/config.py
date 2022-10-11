@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradparam-param/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -76,8 +76,10 @@ def get_grid_param_list():
             "train_simclr_orig": [False],
             "train_ssl_orig_simple": [False],
             "ssl_loss_factor": [None],
-            "loss_name": ['unfolded_grad_match', "grad_act_match"],
-            "grad_from_orig": [False],
+            "loss_name": ['gradparam_param'],#, "grad_act_match"],
+            "grad_from_orig": [True],
+            "use_normed_loss": [True],
+            "separate_orig_clf": [True],
         }
     )
 
@@ -151,7 +153,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0,1,2,4,8],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [96],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 
@@ -214,6 +216,8 @@ def run(
     loss_name,
     grad_from_orig,
     mimic_cxr_target,
+    use_normed_loss,
+    separate_orig_clf,
 ):
     if debug:
         n_epochs = 3
