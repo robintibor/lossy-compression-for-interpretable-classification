@@ -43,6 +43,7 @@ from lossy.losses import kl_divergence
 from lossy.modules import Expression
 from lossy.optim import grads_all_finite
 from lossy.optim import set_grads_to_none
+from lossy.plot import stack_images_in_rows
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
 from lossy.util import np_to_th, th_to_np
 from lossy.util import set_random_seeds
@@ -74,6 +75,7 @@ def get_clf_and_optim(
     lr_clf,
     weight_decay,
     activation,
+    dataset,
 ):
     if model_name in ["wide_nf_net", "wide_bnorm_net"]:
         dropout = 0.3
@@ -247,7 +249,8 @@ def run_exp(
     mimic_cxr_target,
     use_normed_loss,
     separate_orig_clf,
-    add_simple_to_orig_pred_loss,
+    simple_orig_pred_loss_weight,
+    scale_dists_loss_by_n_vals,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
     if saved_model_folder is not None:
@@ -307,6 +310,7 @@ def run_exp(
         lr_clf,
         weight_decay,
         activation,
+        dataset,
     )
 
     if separate_orig_clf:
@@ -565,17 +569,21 @@ def run_exp(
                 else:
                     p_counts = p_counts = [1] * len(dists)
                 assert len(p_counts) == len(dists)
-                task_loss = weighted_sum(
-                    len(dists), *list(itertools.chain(*list(zip(p_counts, dists))))
+                dist_loss_weight = [1, len(dists)][scale_dists_loss_by_n_vals]
+                dist_loss = weighted_sum(
+                    dist_loss_weight, *list(itertools.chain(*list(zip(p_counts, dists))))
                 )
-                if add_simple_to_orig_pred_loss:
+
+                if simple_orig_pred_loss_weight > 0:
+                    simple_pred_loss_adjusted_weight = simple_orig_pred_loss_weight / (simple_orig_pred_loss_weight + 1)
                     simple_to_orig_loss = kl_divergence(
                         orig_acts_grads[wanted_modules[-1]]['out_act'][0].detach(),
-                        simple_acts_grads[wanted_modules[-1]]['out_act'][0])
+                        simple_acts_grads[wanted_modules[-1]]['out_act'][0]) * simple_pred_loss_adjusted_weight
+                    dist_loss = dist_loss / (simple_orig_pred_loss_weight + 1)
                 else:
-                    simple_to_orig_loss = th.zeros_like(task_loss)
+                    simple_to_orig_loss = th.zeros_like(dist_loss)
                 f_simple_loss_before = simple_to_orig_loss
-                f_simple_loss = task_loss
+                f_simple_loss = dist_loss
                 f_orig_loss = th.zeros_like(f_simple_loss)
                 bpd_factors = th.ones_like(X[:, 0, 0, 0])
             else:
@@ -673,10 +681,6 @@ def run_exp(
                 clf_loss.backward()
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
-            with th.no_grad():
-                im_mse_diff = th.nn.functional.mse_loss(X, simple_X) * 100
-                orig_bpd = get_bpd(gen, X)
-                bpd_diff = th.mean(bpd - orig_bpd.clamp_max(15))
         clf.eval()
         log.info(f"Epoch {i_epoch:d}")
         results = {}
@@ -748,8 +752,14 @@ def run_exp(
                 X_preproced.detach().cpu(),
                 os.path.join(output_dir, "X_preproced.th"),
             )
+            X_for_plot = th.flatten(np_to_th(stack_images_in_rows(
+                th_to_np(X),
+                th_to_np(X_preproced),
+                n_cols=int(np.sqrt(len(X_preproced))))),
+                start_dim=0, end_dim=1)
+
             save_image(
-                X_preproced,
+                X_for_plot,
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )

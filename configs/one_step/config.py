@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/smaller-CIFAR10/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/smaller-CIFAR10/weight-task-loss-together/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -55,7 +55,8 @@ def get_grid_param_list():
     #     },
     #     {
     #         'dataset': 'cifar10',
-    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'
+    #         #'saved_model_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'
+    #          'saved_model_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'
     #     }
     # ]
 
@@ -63,14 +64,15 @@ def get_grid_param_list():
     data_params = dictlistprod({
         'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
         #'dataset': ['cifar10'],#, 'mnist'],
-        'saved_model_folder': [None],
+        'saved_model_folder': ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
         'mimic_cxr_target': [None],
+        "first_n": [None],
     })
 
     train_params = dictlistprod(
         {
-            #"n_epochs": [20],
-            "n_epochs": [100],
+            "n_epochs": [2],
+            #"n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -80,7 +82,8 @@ def get_grid_param_list():
             "grad_from_orig": [True],
             "use_normed_loss": [False],
             "separate_orig_clf": [True],
-            "add_simple_to_orig_pred_loss": [True],
+            "simple_orig_pred_loss_weight": [2,4,8],
+            "scale_dists_loss_by_n_vals": [False],
         }
     )
 
@@ -146,15 +149,15 @@ def get_grid_param_list():
             "resample_augmentation_for_clf": [False], # default this was False
             "std_aug_magnitude": [None],#0.25
             "weight_decay": [1e-5],
-            "lr_clf": [5e-4],#5e-4,
-            "lr_preproc": [5e-4],
+            "lr_clf": [1e-3],#5e-4,
+            "lr_preproc": [1e-3],#5e-4,
             "threshold": [
                 0.1,
             ],
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0.2,0.4,0.8,1.6,3.2],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [1.0,1.2,1.4,1.6,1.8],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 
@@ -219,14 +222,14 @@ def run(
     mimic_cxr_target,
     use_normed_loss,
     separate_orig_clf,
-    add_simple_to_orig_pred_loss,
+    simple_orig_pred_loss_weight,
+    first_n,
+    scale_dists_loss_by_n_vals,
 ):
     if debug:
         n_epochs = 3
         first_n = 1024
         save_models = False
-    else:
-        first_n = None
     kwargs = locals()
     kwargs.pop("ex")
     kwargs.pop("debug")

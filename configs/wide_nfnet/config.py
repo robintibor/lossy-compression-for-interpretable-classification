@@ -27,7 +27,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets-shifted-softplus/',
+        'save_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/',
     }]
 
     debug_params = [{
