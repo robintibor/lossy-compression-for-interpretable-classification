@@ -45,7 +45,7 @@ def get_grid_param_list():
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['cifar10']
+        "dataset": ['cifar10'],
     })
 
     random_params= dictlistprod({

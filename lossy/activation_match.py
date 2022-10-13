@@ -313,7 +313,7 @@ def conv_backward(
     return weight_bgrad, bias_bgrad
 
 
-def conv_batch_grad(module, in_act, out_grad):
+def conv_batch_grad(module, in_act, out_grad, conv_fn='loop'):
     #assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
     # recreated_weight_batch_grad = th.nn.functional.conv2d(
     #     in_act.view(-1, 1, *in_act.shape[2:]),
@@ -332,9 +332,11 @@ def conv_batch_grad(module, in_act, out_grad):
     # # n_out_before_stride = np.array(in_act.shape[2:]) - (
     # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
     # # n_removed_by_stride =
-    weight_batch_grad = conv_weight_grad_loop(
-        module, in_act, out_grad
-    )  # conv_weight_grad_backpack(module, in_act, out_grad)
+    if conv_fn == 'loop':
+        weight_batch_grad = conv_weight_grad_loop(
+            module, in_act, out_grad)
+    elif conv_fn == 'backpack':
+        weight_batch_grad = conv_weight_grad_backpack(module, in_act, out_grad)
 
     bias_batch_grad = out_grad.sum(dim=(-2, -1))
     #print("hi")
@@ -865,6 +867,14 @@ def normed_mse(val_x, val_ref, *args, **kwargs):
         val_x, val_ref, *args, **kwargs, reduction="none"
     ).mean(dim=tuple(range(1, len(val_x.shape))))
     return mses / th.mean(val_ref * val_ref, dim=tuple(range(1, len(val_x.shape))))
+
+
+def normed_sse(x_vals, ref_vals, eps=1e-15):
+    diffs = th.sum(th.square(x_vals - ref_vals),
+                   dim=tuple(range(1, len(x_vals.shape))))
+    sum_squares = th.sum(th.square(ref_vals),
+                         dim=tuple(range(1, len(x_vals.shape))))
+    return diffs / (sum_squares + eps)
 
 
 def detach_acts_grads(acts_grads):
