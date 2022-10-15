@@ -27,7 +27,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/',
+        'save_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/',
     }]
 
     debug_params = [{
@@ -53,12 +53,14 @@ def get_grid_param_list():
     })
 
     model_params = dictlistprod({
-        'nf_net': [True, ],#False
-        'depth': [16],
-        'widen_factor': [2,10],
+        'model_name': ['ConvNet', ],#False
+        'depth': [4],
+        'width': [32],
         'dropout': [0.3],
         'save_model': [True],
-        'activation': ["shifted_softplus_1", "shifted_softplus_2", "shifted_softplus_4"],
+        'activation': ["shifted_softplus_1", ],
+        'pooling': ['avgpooling'],
+        'norm': ['none'],
     })
 
     optim_params = dictlistprod({
@@ -84,7 +86,7 @@ def run(
         ex,
         first_n,
         split_test_off_train,
-        nf_net,
+        model_name,
         np_th_seed,
         n_epochs,
         adaptive_gradient_clipping,
@@ -92,11 +94,13 @@ def run(
         lr,
         weight_decay,
         depth,
-        widen_factor,
+        width,
         dropout,
         activation,
         save_model,
         dataset,
+        pooling,
+        norm,
         debug,):
     if debug:
         n_epochs = 3
@@ -125,7 +129,7 @@ def run(
 
 
 
-    from lossy.experiments.wide_nfnet.run import run_exp
+    from lossy.experiments.regular_train.run import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()

@@ -185,8 +185,9 @@ def conv_grad_groups(module, in_act, out_grad):
     return weight_bgrad, bias_bgrad
 
 
-def scaled_conv_grad(module, in_act, out_grad,):
-    grad_on_computed_weight, grad_on_bias = conv_batch_grad(module, in_act, out_grad)
+def scaled_conv_grad(module, in_act, out_grad, conv_grad_fn):
+    grad_on_computed_weight, grad_on_bias = conv_batch_grad(
+        module, in_act, out_grad, conv_grad_fn=conv_grad_fn)
     grad_weight_before_gain = grad_on_computed_weight.squeeze(0) * module.gain
     grad_weight_before_scale = grad_weight_before_gain * module.scale
     grad_weight_before_mean = grad_weight_before_scale - th.mean(
@@ -313,7 +314,7 @@ def conv_backward(
     return weight_bgrad, bias_bgrad
 
 
-def conv_batch_grad(module, in_act, out_grad, conv_fn='loop'):
+def conv_batch_grad(module, in_act, out_grad, conv_grad_fn='loop'):
     #assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
     # recreated_weight_batch_grad = th.nn.functional.conv2d(
     #     in_act.view(-1, 1, *in_act.shape[2:]),
@@ -332,10 +333,10 @@ def conv_batch_grad(module, in_act, out_grad, conv_fn='loop'):
     # # n_out_before_stride = np.array(in_act.shape[2:]) - (
     # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
     # # n_removed_by_stride =
-    if conv_fn == 'loop':
+    if conv_grad_fn == 'loop':
         weight_batch_grad = conv_weight_grad_loop(
             module, in_act, out_grad)
-    elif conv_fn == 'backpack':
+    elif conv_grad_fn == 'backpack':
         weight_batch_grad = conv_weight_grad_backpack(module, in_act, out_grad)
 
     bias_batch_grad = out_grad.sum(dim=(-2, -1))
@@ -644,13 +645,13 @@ def cos_dist_unfolded_grads(w_x_tuple, w_r_tuple, eps):
     return cos_dist
 
 
-def gradparam_per_batch(m, vals):
+def gradparam_per_batch(m, vals, conv_grad_fn):
     assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear", "ScaledStdConv2d"]
     grad_fn = {
         "BatchNorm2d": bnorm_batch_grad,
-        "Conv2d": conv_batch_grad,
+        "Conv2d": partial(conv_batch_grad, conv_grad_fn=conv_grad_fn),
         "Linear": linear_batch_grad,
-        "ScaledStdConv2d": scaled_conv_grad,
+        "ScaledStdConv2d": partial(scaled_conv_grad, conv_grad_fn=conv_grad_fn),
     }[m.__class__.__name__]
 
     grad_tuple = grad_fn(
@@ -691,10 +692,10 @@ def gradparam_relued(m, x_m_vals, ref_m_vals):
     return grad_tuples
 
 
-def gradparam_param(m, x_m_vals, ref_m_vals):
+def gradparam_param(m, x_m_vals, ref_m_vals, conv_grad_fn):
     assert m.__class__.__name__ in ["ScaledStdConv2d", "BatchNorm2d", "Conv2d", "Linear"]
-    x_grads = gradparam_per_batch(m, x_m_vals)
-    ref_grads = gradparam_per_batch(m, ref_m_vals)
+    x_grads = gradparam_per_batch(m, x_m_vals, conv_grad_fn=conv_grad_fn)
+    ref_grads = gradparam_per_batch(m, ref_m_vals, conv_grad_fn=conv_grad_fn)
 
     grad_tuples = [
         (
@@ -770,10 +771,10 @@ def compute_dist(
     ref_act_grads,
     flatten_before=True,
     per_module=False,
-    all_concatenated=False,
+    per_model=False,
 
 ):
-    per_val = (not per_module) and (not all_concatenated)
+    per_val = (not per_module) and (not per_model)
     dists = []
     val_x_all = []
     val_ref_all = []
@@ -791,14 +792,14 @@ def compute_dist(
             if per_module:
                 val_x_for_module.append(val_x)
                 val_ref_for_module.append(val_ref)
-            if all_concatenated:
+            if per_model:
                 val_x_all.append(val_x)
                 val_ref_all.append(val_ref)
         if per_module:
             dist = dist_fn(th.cat(val_x_for_module, dim=1),
                            th.cat(val_ref_for_module, dim=1))
             dists.append(dist)
-    if all_concatenated:
+    if per_model:
         dist = dist_fn(th.cat(val_x_all, dim=1),
                        th.cat(val_ref_all, dim=1))
         dists.append(dist)

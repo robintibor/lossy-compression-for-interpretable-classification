@@ -28,6 +28,7 @@ from lossy.activation_match import get_in_out_activations_per_module
 from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
 from lossy.activation_match import grad_in_act_act
 from lossy.activation_match import gradparam_param
+from lossy.activation_match import normed_sse
 from lossy.activation_match import refed
 from lossy.activation_match import unfolded_grads
 from lossy.affine import AffineOnChans
@@ -49,6 +50,8 @@ from lossy.util import np_to_th, th_to_np
 from lossy.util import set_random_seeds
 from lossy.util import weighted_sum
 from lossy.wide_nf_net import activation_fn
+
+from rtsutils.nb_util import Results
 
 log = logging.getLogger(__name__)
 
@@ -76,19 +79,32 @@ def get_clf_and_optim(
     weight_decay,
     activation,
     dataset,
+    norm_simple_convnet,
+    pooling,
 ):
-    if model_name in ["wide_nf_net", "wide_bnorm_net"]:
+    if model_name in ["wide_nf_net", "wide_bnorm_net", "ConvNet"]:
         dropout = 0.3
         if saved_model_folder is not None:
             saved_model_config = json.load(
                 open(os.path.join(saved_model_folder, "config.json"), "r")
             )
+            assert (
+                saved_model_config.get("model_name", "wide_nf_net") == model_name
+            ), f"{model_name} given but trying to load {saved_model_config['model_name']}"
             depth = saved_model_config["depth"]
-            widen_factor = saved_model_config["widen_factor"]
+            if "widen_factor" in saved_model_config:
+                widen_factor = saved_model_config["widen_factor"]
+            else:
+                widen_factor = saved_model_config["width"]
+
             dropout = saved_model_config["dropout"]
             activation = saved_model_config.get(
                 "activation", "relu"
             )  # default was relu
+            norm_simple_convnet = saved_model_config.get(
+                "norm_simple_convnet", norm_simple_convnet
+            )
+            pooling = saved_model_config.get("pooling", pooling)
             assert saved_model_config.get("dataset", "cifar10") == dataset
         if model_name == "wide_nf_net":
             from lossy.wide_nf_net import conv_init, Wide_NFResNet
@@ -107,17 +123,36 @@ def get_clf_and_optim(
                 depth, widen_factor, dropout, num_classes, activation=activation
             ).cuda()
             model.apply(conv_init)
+        elif model_name == "ConvNet":
+            model = ConvNet(
+                3,
+                num_classes,
+                widen_factor,
+                depth,
+                activation,
+                norm_simple_convnet,
+                pooling,
+                (32, 32),
+            ).cuda()
         else:
             assert False
         if saved_model_folder is not None:
-            saved_clf_state_dict = th.load(
-                os.path.join(saved_model_folder, "nf_net_state_dict.th")
-            )
+            try:
+                # used to have nf_net in name later removed that
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
+                )
+            except FileNotFoundError:
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "state_dict.th")
+                )
+
             model.load_state_dict(saved_clf_state_dict)
     elif model_name == "resnet18":
         from lossy.resnet import resnet18
 
         model = resnet18(num_classes=num_classes)
+    # What is this? probably old and deletable?
     elif model_name == "conv_net":
         model = ConvNet(
             channel=3,
@@ -128,6 +163,11 @@ def get_clf_and_optim(
             net_norm="batchnorm",
             net_pooling="avgpooling",
             im_size=(32, 32),
+        )
+    elif model_name == "linear":
+        model = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(3072, num_classes),
         )
     else:
         assert False
@@ -251,10 +291,17 @@ def run_exp(
     separate_orig_clf,
     simple_orig_pred_loss_weight,
     scale_dists_loss_by_n_vals,
+    per_module,
+    per_model,
+    norm_simple_convnet,
+    pooling,
+    dist_name,
+    conv_grad_name,
 ):
-    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18"]
+    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
+                          "ConvNet", "linear"]
     if saved_model_folder is not None:
-        assert model_name == "wide_nf_net"
+        assert model_name in ["wide_nf_net", "ConvNet"]
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
     writer = SummaryWriter(output_dir)
@@ -311,6 +358,8 @@ def run_exp(
         weight_decay,
         activation,
         dataset,
+        norm_simple_convnet,
+        pooling,
     )
 
     if separate_orig_clf:
@@ -439,12 +488,22 @@ def run_exp(
 
     print("clf", clf)
     log.info("Start training...")
-    if loss_name == "grad_act_match":
-        use_parameter_counts = True
-        val_fn = grad_in_act_act
+    if loss_name in ["grad_act_match", "gradparam_param"]:
+        use_parameter_counts = False#loss_name == "grad_act_match"
+        val_fn = {
+            "grad_act_match": grad_in_act_act,
+            "gradparam_param": partial(gradparam_param, conv_grad_fn=conv_grad_name),
+        }[loss_name]
         if grad_from_orig:
-            val_fn = refed(val_fn, "in_grad")
-        dist_fn = partial(cosine_distance, eps=1e-15)
+            val_to_ref = {
+                "grad_act_match": "in_grad",
+                "gradparam_param": "out_grad",
+            }[loss_name]
+            val_fn = refed(val_fn, val_to_ref)
+        dist_fn = {
+            "cosine_distance": partial(cosine_distance, eps=1e-15),
+            "normed_sse": partial(normed_sse, eps=1e-15),
+        }[dist_name]
         flatten_before_dist = True
     elif loss_name == "unfolded_grad_match":
         use_parameter_counts = False
@@ -454,33 +513,29 @@ def run_exp(
             val_fn = refed(val_fn, "out_grad")
         dist_fn = partial(cos_dist_unfolded_grads, eps=1e-10)
         flatten_before_dist = False
-    elif loss_name == "gradparam_param":
-        use_parameter_counts = False
-        val_fn = gradparam_param
-        if grad_from_orig:
-            val_fn = refed(val_fn, "out_grad")
-        dist_fn = partial(cosine_distance, eps=1e-15)
-        flatten_before_dist = True
 
     if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]:
         if separate_orig_clf:
             clf_for_comparisons = orig_clf
         else:
             clf_for_comparisons = clf
-        wanted_modules = [m for m in clf_for_comparisons.modules() if
-                          len(list(m.parameters(recurse=False))) > 0]
+        wanted_modules = [
+            m
+            for m in clf_for_comparisons.modules()
+            if len(list(m.parameters(recurse=False))) > 0
+        ]
 
+    nb_res = Results(0.98)
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
+            batch_results = dict()
             clf.train()
             X = X.cuda()
             X = X.requires_grad_(True)
             y = y.cuda()
 
             if separate_orig_clf:
-                for p_orig, p_simple in zip(
-                        orig_clf.parameters(),
-                        clf.parameters()):
+                for p_orig, p_simple in zip(orig_clf.parameters(), clf.parameters()):
                     p_orig.data.copy_(p_simple.data.detach())
                 orig_out = orig_clf(X)
                 orig_clf_loss = th.nn.functional.cross_entropy(orig_out, y)
@@ -489,6 +544,7 @@ def run_exp(
                 orig_clf_loss.backward()
                 opt_orig_clf.step()
                 opt_orig_clf.zero_grad(set_to_none=True)
+                batch_results['orig_clf_loss'] = orig_clf_loss.item()
 
             aug_m = get_aug_m(
                 X.shape,
@@ -501,10 +557,14 @@ def run_exp(
             simple_X_aug = aug_m(simple_X)
             X_aug = aug_m(X)
 
-            if loss_name in ["grad_act_match", "unfolded_grad_match",
-                             "gradparam_param"]:
+            if loss_name in [
+                "grad_act_match",
+                "unfolded_grad_match",
+                "gradparam_param",
+            ]:
                 loss_fn = lambda o: th.nn.functional.cross_entropy(
-                    o, y, reduction='none')
+                    o, y, reduction="none"
+                )
                 if use_normed_loss:
                     loss_fn = grad_normed_loss(loss_fn)
                 else:
@@ -530,7 +590,9 @@ def run_exp(
 
                         # Compute and store gradients for classifier update
                         # loss = loss_fn(simple_acts_grads[wanted_modules[-1]]["out_act"][0])
-                        loss = loss_fn(list(simple_acts_grads.values())[-1]["out_act"][0])
+                        loss = loss_fn(
+                            list(simple_acts_grads.values())[-1]["out_act"][0]
+                        )
                         clf_param_grads = th.autograd.grad(
                             loss, clf.parameters(), retain_graph=True
                         )
@@ -558,27 +620,39 @@ def run_exp(
                     simple_acts_grads,
                     orig_acts_grads,
                     flatten_before=flatten_before_dist,
+                    per_module=per_module,
+                    per_model=per_model,
                 )
 
                 dists = torch.mean(torch.stack(dists_per_example), dim=1)
                 if use_parameter_counts:
-                    p_counts = [
-                        sum([p.numel() for p in m.parameters(recurse=False)])
-                        for m in wanted_modules
-                    ]
+                    if not per_model:
+                        p_counts = [
+                            sum([p.numel() for p in m.parameters(recurse=False)])
+                            for m in wanted_modules
+                        ]
+                    else:
+                        p_counts = [1]
                 else:
                     p_counts = p_counts = [1] * len(dists)
                 assert len(p_counts) == len(dists)
                 dist_loss_weight = [1, len(dists)][scale_dists_loss_by_n_vals]
                 dist_loss = weighted_sum(
-                    dist_loss_weight, *list(itertools.chain(*list(zip(p_counts, dists))))
+                    dist_loss_weight,
+                    *list(itertools.chain(*list(zip(p_counts, dists)))),
                 )
 
                 if simple_orig_pred_loss_weight > 0:
-                    simple_pred_loss_adjusted_weight = simple_orig_pred_loss_weight / (simple_orig_pred_loss_weight + 1)
-                    simple_to_orig_loss = kl_divergence(
-                        orig_acts_grads[wanted_modules[-1]]['out_act'][0].detach(),
-                        simple_acts_grads[wanted_modules[-1]]['out_act'][0]) * simple_pred_loss_adjusted_weight
+                    simple_pred_loss_adjusted_weight = simple_orig_pred_loss_weight / (
+                            simple_orig_pred_loss_weight + 1
+                    )
+                    simple_to_orig_loss = (
+                            kl_divergence(
+                                orig_acts_grads[wanted_modules[-1]]["out_act"][0].detach(),
+                                simple_acts_grads[wanted_modules[-1]]["out_act"][0],
+                            )
+                            * simple_pred_loss_adjusted_weight
+                    )
                     dist_loss = dist_loss / (simple_orig_pred_loss_weight + 1)
                 else:
                     simple_to_orig_loss = th.zeros_like(dist_loss)
@@ -587,7 +661,7 @@ def run_exp(
                 f_orig_loss = th.zeros_like(f_simple_loss)
                 bpd_factors = th.ones_like(X[:, 0, 0, 0])
             else:
-                assert loss_name == 'one_step'
+                assert loss_name == "one_step"
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
                         f_clf,
                         f_opt_clf,
@@ -626,6 +700,13 @@ def run_exp(
                 bpd_weight,
                 bpd_loss,
             )
+            batch_results = dict(
+                **batch_results,
+                f_simple_loss_before=f_simple_loss_before.item(),
+                f_simple_loss=f_simple_loss.item(),
+                f_orig_loss=f_orig_loss.item(),
+                bpd_loss=bpd_loss.item(),
+            )
 
             opt_preproc.zero_grad(set_to_none=True)
             im_loss.backward()
@@ -633,8 +714,12 @@ def run_exp(
                 opt_preproc.step()
             opt_preproc.zero_grad(set_to_none=True)
 
-            if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param"] and (
-                    not separate_orig_clf) and (not use_normed_loss):
+            if (
+                    loss_name
+                    in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
+                    and (not separate_orig_clf)
+                    and (not use_normed_loss)
+            ):
                 restore_grads_from(clf.parameters(), "grad_tmp")
             else:
                 # Classifier training
@@ -650,8 +735,9 @@ def run_exp(
                     simple_X_aug = aug_m(simple_X)
 
                 torch.set_rng_state(random_state)
-                z_simple = clf[1].compute_features(clf[0](simple_X_aug))
-                out = clf[1].linear(z_simple)
+                # z_simple = clf[1].compute_features(clf[0](simple_X_aug))
+                # out = clf[1].linear(z_simple)
+                out = clf(simple_X_aug)
                 clf_loss = th.nn.functional.cross_entropy(out, y)
                 if train_orig:
                     out_orig = clf(X_aug.detach())
@@ -679,8 +765,10 @@ def run_exp(
 
                 opt_clf.zero_grad(set_to_none=True)
                 clf_loss.backward()
+                batch_results['clf_loss_simple_train'] = clf_loss.item()
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
+            nb_res.collect(**batch_results)
         clf.eval()
         log.info(f"Epoch {i_epoch:d}")
         results = {}
@@ -744,6 +832,13 @@ def run_exp(
                         results[key + "_bpd"] = mean_bpd
                     writer.flush()
                     sys.stdout.flush()
+            nb_res_last_dict = dict(nb_res.metrics_df.iloc[-1])
+            for key in nb_res_last_dict:
+                print(f"{key:20s} {nb_res_last_dict[key]:.1E}")
+                writer.add_scalar("nb_res_" + key, nb_res_last_dict[key], i_epoch)
+                results["nb_res_" + key] = nb_res_last_dict[key]
+            nb_res.metrics_df.to_pickle(os.path.join(output_dir, 'metrics_df.pkl.zip'))
+
             X, y = next(testloader.__iter__())
             X = X.cuda()
             y = y.cuda()
@@ -752,18 +847,23 @@ def run_exp(
                 X_preproced.detach().cpu(),
                 os.path.join(output_dir, "X_preproced.th"),
             )
-            X_for_plot = th.flatten(np_to_th(stack_images_in_rows(
-                th_to_np(X),
-                th_to_np(X_preproced),
-                n_cols=int(np.sqrt(len(X_preproced))))),
-                start_dim=0, end_dim=1)
+            X_for_plot = th.flatten(
+                np_to_th(
+                    stack_images_in_rows(
+                        th_to_np(X),
+                        th_to_np(X_preproced),
+                        n_cols=int(np.sqrt(len(X_preproced))),
+                    )
+                ),
+                start_dim=0,
+                end_dim=1,
+            )
 
             save_image(
                 X_for_plot,
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )
-
         if save_models:
             th.save(
                 preproc.state_dict(), os.path.join(output_dir, "preproc_state_dict.th")

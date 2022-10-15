@@ -182,6 +182,12 @@ class ConvNet(nn.Module):
             self.net_act = nn.ELU()
         elif net_act == 'shifted_softplus':
             self.net_act = ShiftedSoftplus(beta=1, threshold=20)
+        elif net_act == 'shifted_softplus_1':
+            self.net_act = ShiftedSoftplus(beta=1, threshold=20)
+        elif net_act == 'shifted_softplus_2':
+            self.net_act = ShiftedSoftplus(beta=2, threshold=20)
+        elif net_act == 'shifted_softplus_4':
+            self.net_act = ShiftedSoftplus(beta=4, threshold=20)
         else:
             exit('unknown activation function: %s'%net_act)
 

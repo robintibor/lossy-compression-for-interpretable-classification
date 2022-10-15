@@ -11,6 +11,7 @@ from braindecode.util import set_random_seeds
 from tensorboardX import SummaryWriter
 import os.path
 
+from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.optim import SGD_AGC
 from sam_optim.sam import SAM
@@ -22,7 +23,7 @@ def run_exp(
     dataset,
     first_n,
     split_test_off_train,
-    nf_net,
+    model_name,
     np_th_seed,
     n_epochs,
     adaptive_gradient_clipping,
@@ -30,10 +31,12 @@ def run_exp(
     lr,
     weight_decay,
     depth,
-    widen_factor,
+    width,
     dropout,
     activation,
     save_model,
+    pooling,
+    norm,
     debug,
     output_dir,
 ):
@@ -124,19 +127,23 @@ def run_exp(
     assert hasattr(test_set.transforms, 'transform')
     test_set.transform = transform_test
     test_set.transforms.transform = transform_test
-    if nf_net:
+    if model_name == 'wide_nf_net':
         from lossy.wide_nf_net import conv_init, Wide_NFResNet
 
-        net = Wide_NFResNet(depth, widen_factor, dropout, num_classes,
+        net = Wide_NFResNet(depth, width, dropout, num_classes,
                             activation=activation).cuda()
-        file_name = f"wide-nfresnet-{depth:d}x{widen_factor:d}"
+        file_name = f"wide-nfresnet-{depth:d}x{width:d}"
         net.apply(conv_init)
-    else:
+    elif model_name == 'wide_bnorm_net':
         from lossy.wide_resnet import conv_init, Wide_ResNet
         assert activation == 'relu'
-        net = Wide_ResNet(depth, widen_factor, dropout, num_classes).cuda()
-        file_name = f"wide-resnet-{depth:d}x{widen_factor:d}"
+        net = Wide_ResNet(depth, width, dropout, num_classes).cuda()
+        file_name = f"wide-resnet-{depth:d}x{width:d}"
         net.apply(conv_init)
+    elif model_name == 'ConvNet':
+        net = ConvNet(3, num_classes, width, depth, activation, norm, pooling, (32, 32)).cuda()
+    else:
+        raise ValueError(f"Unknown model {model_name:s}")
 
     print(net)
     criterion = nn.CrossEntropyLoss()
@@ -267,5 +274,5 @@ def run_exp(
     results = dict(**train_results, **test_results)
     writer.close()
     if (not debug) and (save_model):
-        torch.save(net.state_dict(), os.path.join(output_dir, "nf_net_state_dict.th"),)
+        torch.save(net.state_dict(), os.path.join(output_dir, "state_dict.th"),)
     return results
