@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/smaller-CIFAR10/10-epoch-compare-/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -64,7 +64,7 @@ def get_grid_param_list():
     data_params = dictlistprod({
         'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
         #'dataset': ['cifar10'],#, 'mnist'],
-        'saved_model_folder': ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
+        'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
         #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
         'mimic_cxr_target': [None],
         "first_n": [None],
@@ -72,7 +72,7 @@ def get_grid_param_list():
 
     train_params = dictlistprod(
         {
-            "n_epochs": [10],
+            "n_epochs": [100],
             #"n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
@@ -80,8 +80,8 @@ def get_grid_param_list():
             "train_ssl_orig_simple": [False],
             "ssl_loss_factor": [None],
             "loss_name": ['gradparam_param', 'grad_act_match'],#, ""],
-            "grad_from_orig": [False],#True
-            "use_normed_loss": [True],False
+            "grad_from_orig": [True],#True
+            "use_normed_loss": [False],#False
             "separate_orig_clf": [True],
             "simple_orig_pred_loss_weight": [0],#4
             "scale_dists_loss_by_n_vals": [False],
@@ -90,10 +90,11 @@ def get_grid_param_list():
         }
     )
 
-    dist_params = [{
-        "per_module": False,
-        "per_model": False,
-    },
+    dist_params = [
+    #     {
+    #     "per_module": False,
+    #     "per_model": False,
+    # },
         {
         "per_module": True,
         "per_model": False,
@@ -194,7 +195,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [3,3.3,3.6,4,10]#[0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [0.44,0.46,0.48,0.5],#[0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 

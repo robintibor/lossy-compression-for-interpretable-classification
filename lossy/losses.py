@@ -1,5 +1,37 @@
 import torch as th
 
+
+def expected_scaled_loss(unscaled_loss_fn, n_samples=100):
+    def expected_scaled_loss_fn(out):
+        losses = []
+        for alpha in th.linspace(1e-10, 1 - 1e-10, n_samples, device=out.device):
+            scaled_out = out * alpha
+            loss = unscaled_loss_fn(scaled_out)
+            losses.append(loss * (1 / alpha))  # to ensure grad on out*alpha not on out
+        return th.stack(losses, dim=0).sum(dim=1).mean()
+
+    return expected_scaled_loss_fn
+
+
+def expected_scaled_loss_mult(unscaled_loss_fn, n_samples=100):
+    def expected_scaled_loss_fn(out, y):
+        alphas = th.linspace(1e-10, 1 - 1e-10, n_samples, device=out.device)
+        alphas = alphas.view(-1, *((1,) * out.ndim))
+        ys_repeated = th.repeat_interleave(y, len(alphas), dim=0, )
+        scaled_outs = out.unsqueeze(0) * alphas
+        scaled_outs_flat = th.flatten(scaled_outs.transpose(0, 1), start_dim=0, end_dim=1)
+        flat_losses = unscaled_loss_fn(
+            scaled_outs_flat,
+            ys_repeated,)
+        loss = flat_losses.view(len(out), len(alphas)).sum(dim=0)
+        # need to correct for multiplication with alphas
+        loss = loss * (1 / (alphas.view(*loss.shape)))
+        loss = loss.mean()
+        return loss
+
+    return expected_scaled_loss_fn
+
+
 def grad_normed_loss(unnormed_loss_fn, eps=1e-10):
     def normed_loss_fn(out):
         out_with_grad = out.detach().requires_grad_(True)
