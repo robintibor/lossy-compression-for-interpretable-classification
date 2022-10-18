@@ -297,9 +297,11 @@ def run_exp(
     pooling,
     dist_name,
     conv_grad_name,
+    use_expected_loss,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
                           "ConvNet", "linear"]
+    assert not (use_normed_loss and use_expected_loss)
     if saved_model_folder is not None:
         assert model_name in ["wide_nf_net", "ConvNet"]
     writer = SummaryWriter(output_dir)
@@ -489,7 +491,7 @@ def run_exp(
     print("clf", clf)
     log.info("Start training...")
     if loss_name in ["grad_act_match", "gradparam_param"]:
-        use_parameter_counts = False#loss_name == "grad_act_match"
+        use_parameter_counts = False  # loss_name == "grad_act_match"
         val_fn = {
             "grad_act_match": grad_in_act_act,
             "gradparam_param": partial(gradparam_param, conv_grad_fn=conv_grad_name),
@@ -567,6 +569,12 @@ def run_exp(
                 )
                 if use_normed_loss:
                     loss_fn = grad_normed_loss(loss_fn)
+                elif use_expected_loss:
+                    unscaled_loss_fn = lambda o, y: th.nn.functional.cross_entropy(
+                        o, y, reduction="none"
+                    )
+                    expected_scaled_loss_fn = expected_scaled_loss_mult(unscaled_loss_fn)
+                    loss_fn = partial(expected_scaled_loss_fn, y=y)
                 else:
                     unmeaned_loss_fn = loss_fn
                     loss_fn = lambda o: th.mean(unmeaned_loss_fn(o))
@@ -864,6 +872,7 @@ def run_exp(
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )
+
         if save_models:
             th.save(
                 preproc.state_dict(), os.path.join(output_dir, "preproc_state_dict.th")
