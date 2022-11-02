@@ -62,10 +62,15 @@ def get_grid_param_list():
     # saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
     #      _cl                for exp_id in exp_ids]
 
-    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/'#'/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/'
+    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/'#
+    #'/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/'#'/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/'
     df = load_data_frame(parent_exp_folder)
     df = df[df.debug == False]
     df = df[df.finished == True]
+    df = df[(df.n_epochs == 100) & (df.dist_name == 'normed_sse') &
+       (df.loss_name == 'grad_act_match') &
+       (df.use_expected_loss != 1) &
+       (df.per_module == True)]
 
     #df = df[df.activation == "shifted_softplus_1"]
 
@@ -186,6 +191,7 @@ def run(
     os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
     os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
     os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
 
     from lossy.experiments.retrain_on_simplified.run import run_exp

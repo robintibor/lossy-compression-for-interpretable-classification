@@ -18,7 +18,7 @@ from torch import nn
 from torchvision.utils import save_image
 
 from lossy import wide_nf_net, data_locations
-from lossy.activation_match import add_conv_bias_grad
+from lossy.activation_match import add_conv_bias_grad, sse_loss
 from lossy.activation_match import compute_dist
 from lossy.activation_match import conv_weight_grad_loop
 from lossy.activation_match import cos_dist_unfolded_grads
@@ -28,8 +28,11 @@ from lossy.activation_match import get_in_out_activations_per_module
 from lossy.activation_match import get_in_out_acts_and_in_out_grads_per_module
 from lossy.activation_match import grad_in_act_act
 from lossy.activation_match import gradparam_param
+from lossy.activation_match import normed_l1
 from lossy.activation_match import normed_sse
+from lossy.activation_match import normed_sqrt_sse
 from lossy.activation_match import refed
+from lossy.activation_match import sse_loss
 from lossy.activation_match import unfolded_grads
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
@@ -50,6 +53,8 @@ from lossy.util import np_to_th, th_to_np
 from lossy.util import set_random_seeds
 from lossy.util import weighted_sum
 from lossy.wide_nf_net import activation_fn
+from lossy.losses import expected_scaled_loss_mult
+
 
 from rtsutils.nb_util import Results
 
@@ -81,6 +86,7 @@ def get_clf_and_optim(
     dataset,
     norm_simple_convnet,
     pooling,
+    im_size,
 ):
     if model_name in ["wide_nf_net", "wide_bnorm_net", "ConvNet"]:
         dropout = 0.3
@@ -132,7 +138,7 @@ def get_clf_and_optim(
                 activation,
                 norm_simple_convnet,
                 pooling,
-                (32, 32),
+                im_size,
             ).cuda()
         else:
             assert False
@@ -362,6 +368,7 @@ def run_exp(
         dataset,
         norm_simple_convnet,
         pooling,
+        im_size,
     )
 
     if separate_orig_clf:
@@ -505,6 +512,9 @@ def run_exp(
         dist_fn = {
             "cosine_distance": partial(cosine_distance, eps=1e-15),
             "normed_sse": partial(normed_sse, eps=1e-15),
+            "sse": sse_loss,
+            "normed_sqrt_sse": partial(normed_sqrt_sse, eps=1e-15),
+            "normed_l1": partial(normed_l1, eps=1e-15),
         }[dist_name]
         flatten_before_dist = True
     elif loss_name == "unfolded_grad_match":

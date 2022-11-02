@@ -110,6 +110,7 @@ def run(ex, model_name, n_epochs, image_inds, bpd_weight, np_th_seed, val_fn_nam
     os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
     os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
     os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
 
     from lossy.experiments.post_hoc_class_grad_match import  run_exp

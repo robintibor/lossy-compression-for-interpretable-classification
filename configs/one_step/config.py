@@ -3,7 +3,7 @@ import os
 os.sys.path.insert(0, "/home/schirrmr/code/utils/")
 os.sys.path.insert(0, "/home/schirrmr/code/lossy/")
 os.sys.path.insert(0, "/home/schirrmr/code/nfnets/")
-#os.sys.path.insert(0, "/home/schirrmr/code/invertible-neurips/")
+# os.sys.path.insert(0, "/home/schirrmr/code/invertible-neurips/")
 os.sys.path.insert(0, "/home/schirrmr/code/cifar10-clf/")
 import time
 import logging
@@ -32,8 +32,8 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/", #before rebuttal without "icml-"
-                           #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/",  # before rebuttal without "icml-"
+            # "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
 
@@ -60,70 +60,87 @@ def get_grid_param_list():
     #     }
     # ]
 
-
-    data_params = dictlistprod({
-        'dataset': ['cifar10' ],#, 'mnist', 'fashionmnist', 'svhn'],
-        #'dataset': ['cifar10'],#, 'mnist'],
-        'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
-        #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
-        'mimic_cxr_target': [None],
-        "first_n": [None],
-    })
+    data_params = dictlistprod(
+        {
+            "dataset": ["cifar10", "mnist", "fashionmnist", "svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
+            #'dataset': ['cifar10'],#, 'mnist'],
+            "saved_model_folder": [
+                None
+            ],  # ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
+            #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
+            "mimic_cxr_target": [None],
+            "first_n": [None],
+        }
+    )
 
     train_params = dictlistprod(
         {
+            # "n_epochs": [2],
             "n_epochs": [100],
-            #"n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
             "train_ssl_orig_simple": [False],
             "ssl_loss_factor": [None],
-            "loss_name": ['gradparam_param', 'grad_act_match'],#, ""],
-            "grad_from_orig": [True],#True
-            "use_normed_loss": [False],#False
+            "grad_from_orig": [True],  # True
+            "use_normed_loss": [False],  # False
+            "use_expected_loss": [False,],  # False
             "separate_orig_clf": [True],
-            "simple_orig_pred_loss_weight": [0],#4
+            "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
-            "dist_name": ['normed_sse'],
-            "conv_grad_name": ['loop'], #loop backpack
+            "dist_name": ["normed_sse"],
+            "conv_grad_name": ["loop"],  # loop backpack
         }
     )
 
-    dist_params = [
-    #     {
-    #     "per_module": False,
-    #     "per_model": False,
-    # },
+    loss_and_dist_params = [
         {
-        "per_module": True,
-        "per_model": False,
-    },
-        {
-        "per_module": False,
-        "per_model": True,
-    },
+            "loss_name": "grad_act_match",  # , ""],#'gradparam_param',
+            "per_module": True,
+            "per_model": False,
+        },
+        # {
+        #     "per_module": False,
+        #     "per_model": True,
+        #     "loss_name": "gradparam_param",
+        # },
     ]
 
-    noise_params = [{
+    # dist_params = [
+    # #     {
+    # #     "per_module": False,
+    # #     "per_model": False,
+    # # },
+    #     {
+    #     "per_module": True,
+    #     "per_model": False,
+    # },
+    # #     {
+    # #     "per_module": False,
+    # #     "per_model": True,
+    # # },
+    # ]
+
+    noise_params = [
+        {
             "noise_augment_level": 0,
-            'trivial_augment': False,
-            'extra_augs': False,
+            "trivial_augment": False,
+            "extra_augs": False,
         },
     ]
 
     quantize_params = [
-    #     {
-    #     "noise_after_simplifier": False,
-    #     "noise_before_generator": True,
-    #     "np_th_seed": 0,
-    #     'quantize_after_simplifier': True,
-    # },
+        #     {
+        #     "noise_after_simplifier": False,
+        #     "noise_before_generator": True,
+        #     "np_th_seed": 0,
+        #     'quantize_after_simplifier': True,
+        # },
         {
             "noise_after_simplifier": True,
             "noise_before_generator": False,
             "np_th_seed": 0,
-            'quantize_after_simplifier': True,
+            "quantize_after_simplifier": True,
         }
     ]
 
@@ -143,7 +160,7 @@ def get_grid_param_list():
 
     random_params = dictlistprod(
         {
-            #"np_th_seed": [0],
+            # "np_th_seed": [0],
         }
     )
 
@@ -174,28 +191,37 @@ def get_grid_param_list():
             ],
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
-            'save_models': [True],
-            'activation': ["shifted_softplus_1"],
-            "norm_simple_convnet": ['none'],
-            "pooling": ['avgpooling'],
+            "save_models": [True],
+            "activation": ["shifted_softplus_1"],
+            "norm_simple_convnet": ["none"],
+            "pooling": ["avgpooling"],
         }
     )
+
     optim_params = dictlistprod(
         {
-            "resample_"
-            "augmentation": [False],# default this was True
-            "resample_augmentation_for_clf": [False], # default this was False
-            "std_aug_magnitude": [None],#0.25
+            "resample_augmentation": [False],  # default this was True
+            "resample_augmentation_for_clf": [False],  # default this was False
+            "std_aug_magnitude": [None],  # 0.25
             "weight_decay": [1e-5],
-            "lr_clf": [1e-3,],#5e-4,
-            "lr_preproc": [5e-4,],#5e-4,
+            "lr_clf": [
+                1e-3,
+            ],  # 5e-4,
+            "lr_preproc": [
+                5e-4,
+            ],  # 5e-4,
             "threshold": [
                 0.1,
             ],
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0.44,0.46,0.48,0.5],#[0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [
+                0.7,
+                0.8,
+                0.9,
+                1.0
+            ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
 
@@ -204,7 +230,7 @@ def get_grid_param_list():
             save_params,
             train_params,
             random_params,
-            dist_params,
+            loss_and_dist_params,
             debug_params,
             model_params,
             optim_params,
@@ -270,6 +296,7 @@ def run(
     pooling,
     dist_name,
     conv_grad_name,
+    use_expected_loss,
 ):
     if debug:
         n_epochs = 3
@@ -295,11 +322,18 @@ def run(
     ex.info["finished"] = False
 
     import os
-    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
-    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
-    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
-    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
 
+    os.environ["pytorch_data"] = "/home/schirrmr/data/pytorch-datasets/"
+    os.environ[
+        "mimic_cxr"
+    ] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ[
+        "small_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ[
+        "normal_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
     from lossy.experiments.one_step.run import run_exp
 
     results = run_exp(**kwargs)

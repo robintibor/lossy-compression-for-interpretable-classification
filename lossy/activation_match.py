@@ -72,12 +72,16 @@ def get_all_activations(
 
 
 def get_in_out_acts_and_in_out_grads_per_module(
-    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+    net, X, loss_fn, wanted_modules=None, data_parallel=False,
+        **backward_kwargs
 ):
     if wanted_modules is None:
         wanted_modules = net.modules()
 
-    module_to_vals = {m: {} for m in wanted_modules}
+    if data_parallel:
+        module_to_vals = {}
+    else:
+        module_to_vals = {m: {} for m in wanted_modules}
 
     handles = []
 
@@ -93,9 +97,12 @@ def get_in_out_acts_and_in_out_grads_per_module(
             module_to_vals[module]["in_grad"].append(grad_input)
 
     def append_activations(module, input, output):
-        assert "in_act" not in module_to_vals[module]
+        if data_parallel:
+            module_to_vals[module] = {}
+        else:
+            assert "in_act" not in module_to_vals[module]
+            assert "out_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
-        assert "out_act" not in module_to_vals[module]
         if hasattr(output, "register_hook"):
             output = (output,)
         module_to_vals[module]["out_act"] = output
@@ -136,16 +143,22 @@ def get_in_out_acts_and_in_out_grads_per_module(
     return module_to_vals
 
 
-def get_in_out_activations_per_module(net, X, wanted_modules=None,):
+def get_in_out_activations_per_module(net, X, wanted_modules=None, data_parallel=False):
     if wanted_modules is None:
         wanted_modules = net.modules()
 
-    module_to_vals = {m: {} for m in wanted_modules}
+    if data_parallel:
+        module_to_vals = {}
+    else:
+        module_to_vals = {m: {} for m in wanted_modules}
 
     def append_activations(module, input, output):
-        assert "in_act" not in module_to_vals[module]
+        if data_parallel:
+            module_to_vals[module] = {}
+        else:
+            assert "in_act" not in module_to_vals[module]
+            assert "out_act" not in module_to_vals[module]
         module_to_vals[module]["in_act"] = input
-        assert "out_act" not in module_to_vals[module]
         if hasattr(output, "register_hook"):
             output = (output,)
         module_to_vals[module]["out_act"] = output
@@ -422,7 +435,7 @@ def conv_weight_grad(module, in_act, out_grad):
         if padding == 'same':
             padding = tuple(np.array(module.kernel_size) // 2)
         elif padding == 'valid':
-            padding (0,) *  (in_act.ndim - 2)
+            padding = (0,) * (in_act.ndim - 2)
         else:
             raise ValueError(f"Unknown padding {padding:s}")
     recreated_weight_grad = th.nn.functional.conv2d(
@@ -502,6 +515,12 @@ def grad_out_act(m, x_m_vals, ref_m_vals):
 
 def grad_in_act(m, x_m_vals, ref_m_vals):
     return list(zip(x_m_vals["in_grad"], ref_m_vals["in_grad"]))
+
+def in_act(m, x_m_vals, ref_m_vals):
+    return list(zip(x_m_vals["in_act"], ref_m_vals["in_act"]))
+
+def out_act(m, x_m_vals, ref_m_vals):
+    return list(zip(x_m_vals["out_act"], ref_m_vals["out_act"]))
 
 
 def grad_out_act_act(m, x_m_vals, ref_m_vals):
@@ -876,6 +895,22 @@ def normed_sse(x_vals, ref_vals, eps=1e-15):
     sum_squares = th.sum(th.square(ref_vals),
                          dim=tuple(range(1, len(x_vals.shape))))
     return diffs / (sum_squares + eps)
+
+
+def normed_l1(x_vals, ref_vals, eps=1e-15):
+    diffs = th.sum(th.abs(x_vals - ref_vals),
+                   dim=tuple(range(1, len(x_vals.shape))))
+    sum_abs = th.sum(th.abs(ref_vals),
+                         dim=tuple(range(1, len(x_vals.shape))))
+    return diffs / (sum_abs + eps)
+
+
+def normed_sqrt_sse(x_vals, ref_vals, eps=1e-15):
+    diffs = th.sqrt(th.sum(th.square(x_vals - ref_vals),
+                   dim=tuple(range(1, len(x_vals.shape)))))
+    sum_squares = th.sqrt(th.sum(th.square(ref_vals),
+                         dim=tuple(range(1, len(x_vals.shape)))) + eps)
+    return diffs / sum_squares
 
 
 def detach_acts_grads(acts_grads):

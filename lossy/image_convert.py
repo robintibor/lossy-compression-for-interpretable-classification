@@ -62,6 +62,10 @@ def cifar10_standardized_to_img_0_1(img):
     return unnormed
 
 
+def to_plus_minus_one(x):
+    return (x * 2) - 1
+
+
 class ImageConverter(object):
     def __init__(self, image_standardize_before_glow, sigmoid_on_alpha,
                  standardize_for_clf, glow_noise_on_out, quantize_data):

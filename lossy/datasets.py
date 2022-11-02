@@ -328,6 +328,41 @@ def get_dataset(
         im_size = (32, 32)
         class_names = dst_train.classes
         num_classes = len(class_names)
+    elif dataset == 'IMAGENET':
+
+        imagenet_root = data_locations.imagenet
+
+        # https://github.com/pytorch/examples/blob/fcf8f9498e40863405fe367b9521269e03d7f521/imagenet/main.py#L213-L237
+        train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.ToTensor(),
+        ])
+
+        valid_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ])
+
+        # load the dataset
+        dst_train = ImageNet(
+            root=imagenet_root,
+            split="train",
+            transform=train_transform,
+            ignore_archive=True,
+        )
+
+        dst_test = ImageNet(
+            root=imagenet_root,
+            split="val",
+            transform=valid_transform,
+            ignore_archive=True,
+        )
+
+        channel = 3
+        im_size = (224, 224)
+        class_names = dst_train.classes
+        num_classes = len(class_names)
     else:
         raise NotImplementedError("unknown dataset: %s" % dataset)
 

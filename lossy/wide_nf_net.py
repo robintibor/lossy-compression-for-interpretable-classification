@@ -23,6 +23,7 @@ mean = {
     "mnist_fashion": [0.2, 0.2, 0.2],
     "mnist_cifar": [0.2, 0.2, 0.2],
     "mimic-cxr": [0.2, 0.2, 0.2],
+    "imagenet": [0.485, 0.456, 0.406],
 }
 
 std = {
@@ -35,6 +36,7 @@ std = {
     "mnist_fashion": [0.3, 0.3, 0.3],
     "mnist_cifar": [0.3, 0.3, 0.3],
     "mimic-cxr": [0.3, 0.3, 0.3],
+    "imagenet": [0.229, 0.224, 0.225],
 }
 
 
