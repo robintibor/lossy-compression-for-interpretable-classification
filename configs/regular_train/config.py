@@ -27,7 +27,7 @@ def get_grid_param_list():
     dictlistprod = cartesian_dict_of_lists_product
 
     save_params = [{
-        'save_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/',
+        'save_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/',
     }]
 
     debug_params = [{
@@ -35,7 +35,7 @@ def get_grid_param_list():
     }]
 
     train_params = dictlistprod({
-        'n_epochs': [200],
+        'n_epochs': [100],
         'adaptive_gradient_clipping': [False],
         'optim_type': ['adamw'],
         'lr': [1e-3,3e-4],#[1e-1,5e-2,1e-2,5e-3],
@@ -45,7 +45,7 @@ def get_grid_param_list():
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['cifar10'],
+        "dataset": ['stripes'],
     })
 
     random_params= dictlistprod({
@@ -53,9 +53,9 @@ def get_grid_param_list():
     })
 
     model_params = dictlistprod({
-        'model_name': ['ConvNet', ],#False
-        'depth': [4],
-        'width': [32],
+        'model_name': ['wide_nf_net', ],#False
+        'depth': [16],
+        'width': [2],
         'dropout': [0.3],
         'save_model': [True],
         'activation': ["shifted_softplus_1", ],

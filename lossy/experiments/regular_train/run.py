@@ -10,6 +10,7 @@ import wide_resnet.config as cf
 from braindecode.util import set_random_seeds
 from tensorboardX import SummaryWriter
 import os.path
+from lossy import wide_nf_net
 
 from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
@@ -69,13 +70,14 @@ def run_exp(
         eval_batch_size=512,
         split_test_off_train=split_test_off_train,
     )
-    if dataset in ['cifar10', 'cifar100']:
+    if dataset in ['cifar10', 'cifar100', 'stripes']:
+        # but won't be applied for stripes actually atm
         transform_train = transforms.Compose(
             [
                 transforms.RandomCrop(32, padding=4),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+                transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )  # meanstd transformation
     else:
@@ -88,14 +90,15 @@ def run_exp(
                 transforms.RandomCrop(32, padding=4),
                 transforms.ToTensor(),
                 transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
-                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+                transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )  # meanstd transformation
-    if dataset in ['cifar10', 'cifar100']:
+    if dataset in ['cifar10', 'cifar100', 'stripes']:
+        # but won't be applied for stripes actually atm
         transform_test = transforms.Compose(
             [
                 transforms.ToTensor(),
-                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+                transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )
     else:
@@ -106,7 +109,7 @@ def run_exp(
                 ),  # transforms.InterpolationMode.BILINEAR),
                 transforms.ToTensor(),
                 transforms.Lambda(lambda x: torch.cat((x, x, x), dim=0)),
-                transforms.Normalize(cf.mean[dataset], cf.std[dataset]),
+                transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )
 
@@ -118,15 +121,15 @@ def run_exp(
     if split_test_off_train is True:
         train_set = train_set.dataset
         test_set = test_set.dataset
-
-    assert hasattr(train_set, 'transform')
-    assert hasattr(train_set.transforms, 'transform')
-    train_set.transform = transform_train
-    train_set.transforms.transform = transform_train
-    assert hasattr(test_set, 'transform')
-    assert hasattr(test_set.transforms, 'transform')
-    test_set.transform = transform_test
-    test_set.transforms.transform = transform_test
+    if dataset != 'stripes':
+        assert hasattr(train_set, 'transform')
+        assert hasattr(train_set.transforms, 'transform')
+        train_set.transform = transform_train
+        train_set.transforms.transform = transform_train
+        assert hasattr(test_set, 'transform')
+        assert hasattr(test_set.transforms, 'transform')
+        test_set.transform = transform_test
+        test_set.transforms.transform = transform_testS
     if model_name == 'wide_nf_net':
         from lossy.wide_nf_net import conv_init, Wide_NFResNet
 
@@ -271,8 +274,9 @@ def run_exp(
         epoch_time = time.time() - start_time
         elapsed_time += epoch_time
         print("| Elapsed time : %d:%02d:%02d" % (cf.get_hms(elapsed_time)))
+        if (not debug) and (save_model):
+            torch.save(net.state_dict(), os.path.join(output_dir, "state_dict.th"), )
+            #torch.save(net, os.path.join(output_dir, "net.th"), )
     results = dict(**train_results, **test_results)
     writer.close()
-    if (not debug) and (save_model):
-        torch.save(net.state_dict(), os.path.join(output_dir, "state_dict.th"),)
     return results

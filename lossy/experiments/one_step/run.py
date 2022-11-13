@@ -87,8 +87,9 @@ def get_clf_and_optim(
     norm_simple_convnet,
     pooling,
     im_size,
+    external_pretrained_clf,
 ):
-    if model_name in ["wide_nf_net", "wide_bnorm_net", "ConvNet"]:
+    if model_name in ["wide_nf_net", "wide_bnorm_net", "ConvNet",]:
         dropout = 0.3
         if saved_model_folder is not None:
             saved_model_config = json.load(
@@ -156,8 +157,10 @@ def get_clf_and_optim(
             model.load_state_dict(saved_clf_state_dict)
     elif model_name == "resnet18":
         from lossy.resnet import resnet18
-
-        model = resnet18(num_classes=num_classes)
+        model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
+    elif model_name == "torchvision_resnet18":
+        from torchvision.models import resnet18
+        model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
     # What is this? probably old and deletable?
     elif model_name == "conv_net":
         model = ConvNet(
@@ -304,15 +307,15 @@ def run_exp(
     dist_name,
     conv_grad_name,
     use_expected_loss,
+    external_pretrained_clf,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
-                          "ConvNet", "linear"]
+                          "ConvNet", "linear", "torchvision_resnet18"]
     assert not (use_normed_loss and use_expected_loss)
     if saved_model_folder is not None:
         assert model_name in ["wide_nf_net", "ConvNet"]
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
-    writer = SummaryWriter(output_dir)
     writer.add_hparams(hparams, metric_dict={}, name=output_dir)
     writer.flush()
     tqdm = lambda x: x
@@ -323,6 +326,7 @@ def run_exp(
     split_test_off_train = False
     n_warmup_epochs = 0
     bias_for_conv = True
+    data_parallel = th.cuda.device_count() > 1
 
     log.info("Load data...")
 
@@ -369,10 +373,15 @@ def run_exp(
         norm_simple_convnet,
         pooling,
         im_size,
+        external_pretrained_clf,
     )
 
     if separate_orig_clf:
         orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
+
+    if data_parallel:
+        clf = nn.DataParallel(clf)
+        orig_clf = nn.DataParallel(orig_clf)
 
     log.info("Create preprocessor...")
 
@@ -409,20 +418,29 @@ def run_exp(
             ),
             AffineOnChans(3),  # Does this even make sense after sigmoid?
         ).cuda()
+
     preproc_post = nn.Sequential()
     if quantize_after_simplifier:
-        preproc_post.add_module("quantize", Expression(quantize_data))
+        preproc_post.add_module(
+            "quantize", Expression(quantize_data))
     if noise_after_simplifier:
-        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
-    preproc = nn.Sequential(preproc, preproc_post)
+        preproc_post.add_module(
+            "add_glow_noise", Expression(add_glow_noise_to_0_1))
+    preproc = nn.Sequential(
+        preproc, preproc_post)
 
     beta_preproc = (0.5, 0.99)
 
     opt_preproc = torch.optim.Adam(
-        preproc.parameters(), lr=lr_preproc, weight_decay=5e-5, betas=beta_preproc
+        preproc.parameters(),
+        lr=lr_preproc,
+        weight_decay=5e-5,
+        betas=beta_preproc,
     )
+    if data_parallel:
+        preproc = nn.DataParallel(preproc)
 
-    def get_aug_m(X_shape, trivial_augment, std_aug_magnitude, extra_augs):
+    def get_aug_m(X_shape, trivial_augment, std_aug_magnitude, extra_augs, im_size):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
         aug_m = nn.Sequential()
         if trivial_augment:
@@ -436,19 +454,19 @@ def run_exp(
                     same_across_batch=False,
                 ),
             )
-        else:
+        elif dataset != 'imagenet':  # imagenet random crop done already
             aug_m.add_module(
                 "crop",
                 FixedAugment(
                     kornia.augmentation.RandomCrop(
-                        (32, 32),
+                        im_size,
                         padding=4,
                     ),
                     X_shape,
                 ),
             )
 
-        if dataset in ["cifar10", "cifar100"]:
+        if dataset in ["cifar10", "cifar100", "imagenet"]:
             aug_m.add_module(
                 "hflip",
                 FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
@@ -462,6 +480,7 @@ def run_exp(
                 "stripes",
                 "mnist_fashion",
                 "mnist_cifar",
+                "stripes_imagenet",
             ]
         aug_m.add_module("noise", Expression(lambda x: x + noise))
 
@@ -481,7 +500,13 @@ def run_exp(
         )
 
     log.info("Load generative model...")
-    glow = load_small_glow()
+    if im_size == (32, 32):
+        glow = load_small_glow()
+    elif im_size == (224, 224):
+        large_gen = th.load('/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/large-res-glow/8/gen_2.th')
+        glow = large_gen[1]
+    else:
+        raise ValueError(f"Unknown image size {im_size}")
 
     gen = nn.Sequential()
     gen.add_module("to_glow_range", Expression(img_0_1_to_glow_img))
@@ -494,6 +519,9 @@ def run_exp(
         _, lp = gen(X)
         bpd = -(lp - np.log(256) * n_dims) / (np.log(2) * n_dims)
         return bpd
+
+    if data_parallel:
+        gen = nn.DataParallel(gen)
 
     print("clf", clf)
     log.info("Start training...")
@@ -546,10 +574,18 @@ def run_exp(
             X = X.requires_grad_(True)
             y = y.cuda()
 
+            aug_m = get_aug_m(
+                X.shape,
+                trivial_augment=trivial_augment,
+                std_aug_magnitude=std_aug_magnitude,
+                extra_augs=extra_augs,
+                im_size=im_size,
+            )
+            X_aug = aug_m(X)
             if separate_orig_clf:
                 for p_orig, p_simple in zip(orig_clf.parameters(), clf.parameters()):
                     p_orig.data.copy_(p_simple.data.detach())
-                orig_out = orig_clf(X)
+                orig_out = orig_clf(X_aug.detach())
                 orig_clf_loss = th.nn.functional.cross_entropy(orig_out, y)
 
                 opt_orig_clf.zero_grad(set_to_none=True)
@@ -558,16 +594,9 @@ def run_exp(
                 opt_orig_clf.zero_grad(set_to_none=True)
                 batch_results['orig_clf_loss'] = orig_clf_loss.item()
 
-            aug_m = get_aug_m(
-                X.shape,
-                trivial_augment=trivial_augment,
-                std_aug_magnitude=std_aug_magnitude,
-                extra_augs=extra_augs,
-            )
 
             simple_X = preproc(X)
             simple_X_aug = aug_m(simple_X)
-            X_aug = aug_m(X)
 
             if loss_name in [
                 "grad_act_match",
@@ -591,12 +620,13 @@ def run_exp(
 
                 random_state = torch.get_rng_state()
                 orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
-                    clf_for_comparisons, X_aug, loss_fn, wanted_modules=wanted_modules
+                    clf_for_comparisons, X_aug, loss_fn, wanted_modules=wanted_modules,
                 )
                 orig_acts_grads = detach_acts_grads(orig_acts_grads)
 
                 set_grads_to_none(clf_for_comparisons.parameters())
 
+                assert False, "set cuda random state!!"
                 torch.set_rng_state(random_state)
                 if grad_from_orig:
                     simple_acts_grads = get_in_out_activations_per_module(
@@ -631,7 +661,6 @@ def run_exp(
                 set_grads_to_none(clf.parameters())
                 set_grads_to_none(preproc.parameters())
                 set_grads_to_none([X])
-
                 dists_per_example = compute_dist(
                     dist_fn,
                     val_fn,
@@ -641,6 +670,8 @@ def run_exp(
                     per_module=per_module,
                     per_model=per_model,
                 )
+                # for dataparallel
+                dists_per_example = [d.to(dists_per_example[0].device) for d in dists_per_example]
 
                 dists = torch.mean(torch.stack(dists_per_example), dim=1)
                 if use_parameter_counts:
@@ -691,10 +722,12 @@ def run_exp(
                     )
                     f_opt_clf.step(f_simple_loss_before)
 
+                assert False, "set cuda random state!!"
                 torch.set_rng_state(random_state)
                 f_simple_out = f_clf(simple_X_aug)
                 f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
+                assert False, "set cuda random state!!"
                 torch.set_rng_state(random_state)
                 f_orig_out = f_clf(X_aug)
                 f_orig_loss_per_ex = th.nn.functional.cross_entropy(
@@ -737,6 +770,7 @@ def run_exp(
                     in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
                     and (not separate_orig_clf)
                     and (not use_normed_loss)
+                    and (not use_expected_loss)
             ):
                 restore_grads_from(clf.parameters(), "grad_tmp")
             else:

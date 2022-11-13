@@ -3,9 +3,13 @@ from copy import deepcopy
 import numpy as np
 import torch
 import torch as th
+import kornia
 
 from lossy.datasets import linear_interpolate_a_b
 from lossy.util import np_to_th
+from lossy import data_locations
+from torchvision import transforms
+from torchvision.datasets import ImageNet
 
 
 # maybe can be imported from lossy.datasets instead? version is slightly different
@@ -31,9 +35,9 @@ class MixedSet(th.utils.data.Dataset):
 
 
 class StripesSet(th.utils.data.Dataset):
-    def __init__(self, orig_set, label_from, stripes_factor):
+    def __init__(self, orig_set, label_from, stripes_factor, im_size, freq):
         self.orig_set = orig_set
-        self.sin_vals = np.sin(np.linspace(0, 11 * np.pi, 32))
+        self.sin_vals = np.sin(np.linspace(0, freq * np.pi, im_size))
         self.sin_vals = self.sin_vals * 0.5 + 0.5
         # make proper range
         self.label_from = label_from
@@ -42,16 +46,17 @@ class StripesSet(th.utils.data.Dataset):
     def __getitem__(self, index):
         x_orig, y_orig = self.orig_set[index]
         horizontal = th.rand(1).item() > 0.5
+        n_sin_vals = len(self.sin_vals)
         if horizontal:
             x_orig.data[:, :, :] = (
                 x_orig.data[:, :, :] * (1 - self.stripes_factor)
-                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, 32, 1) * self.stripes_factor
+                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, n_sin_vals, 1) * self.stripes_factor
             ).data[:]
         else:
 
             x_orig.data[:, :, :] = (
                 x_orig.data[:, :, :] * (1 -  self.stripes_factor)
-                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, 1, 32) * self.stripes_factor
+                + np_to_th(self.sin_vals, dtype=np.float32).reshape(1, 1, n_sin_vals) * self.stripes_factor
             ).data[:]
         if self.label_from == "stripes":
             y = int(horizontal)
@@ -76,6 +81,7 @@ def load_dataset(
         "mnist_fashion",
         "stripes",
         "mnist_cifar",
+        "stripes_imagenet"
     ]
 
     from lossy.datasets import get_train_test_datasets
@@ -114,8 +120,17 @@ def load_dataset(
         )
         label_from = ["stripes", "orig_set"][reverse]
         num_classes = [2, 10][reverse]
-        dst_train = StripesSet(train_cifar, label_from=label_from, stripes_factor=stripes_factor)
-        dst_test = StripesSet(test_cifar, label_from=label_from, stripes_factor=stripes_factor)
+        dst_train = StripesSet(train_cifar, label_from=label_from, stripes_factor=stripes_factor, im_size=32, freq=11)
+        dst_test = StripesSet(test_cifar, label_from=label_from, stripes_factor=stripes_factor, im_size=32, freq=11)
+    elif dataset_name == "stripes_imagenet":
+
+        train_imagenet, test_imagenet = get_train_test_datasets(
+            "IMAGENET", data_path, standardize=False
+        )
+        label_from = ["stripes", "orig_set"][reverse]
+        num_classes = [2, 1000][reverse]
+        dst_train = StripesSet(train_imagenet, label_from=label_from, stripes_factor=stripes_factor, im_size=224, freq=11)
+        dst_test = StripesSet(test_imagenet, label_from=label_from, stripes_factor=stripes_factor, im_size=224, freq=11)
     elif dataset_name == "mnist_cifar":
         num_classes = 10
         from lossy.datasets import MixedDataset

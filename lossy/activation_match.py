@@ -19,6 +19,7 @@ def save_grads_to(params, fieldname):
     for p in params:
         setattr(p, fieldname, p.grad.detach().clone())
 
+
 # https://github.com/f-dangel/backpack/blob/1da7e53ebb2c490e2b7dd9f79116583641f3cca1/backpack/utils/subsampling.py
 def subsample(tensor: Tensor, dim: int = 0, subsampling: List[int] = None) -> Tensor:
     """Select samples from a tensor along a dimension.
@@ -71,41 +72,111 @@ def get_all_activations(
     return activations
 
 
-def get_in_out_acts_and_in_out_grads_per_module(
-    net, X, loss_fn, wanted_modules=None, data_parallel=False,
-        **backward_kwargs
+def get_in_out_activations_per_module(
+    net,
+    X,
+    wanted_modules=None,
 ):
     if wanted_modules is None:
         wanted_modules = net.modules()
 
+    data_parallel = hasattr(net, "device_ids")
+    module_to_vals = {m: {} for m in wanted_modules}
     if data_parallel:
-        module_to_vals = {}
+        device_ids = net.device_ids
     else:
-        module_to_vals = {m: {} for m in wanted_modules}
+        device_ids = [X.device.index]
+    device_id_to_i_list = {device_id: i for i, device_id in enumerate(device_ids)}
+
+    def append_activations(module, input, output, orig_module):
+        is_replica = (
+            hasattr(module, "_is_replica") and module._is_replica
+        )  # just for checks
+        assert data_parallel == is_replica
+        if not data_parallel:
+            assert "in_act" not in module_to_vals[orig_module]
+            assert "out_act" not in module_to_vals[orig_module]
+        if "in_act" not in module_to_vals[orig_module]:
+            module_to_vals[orig_module]["in_act"] = [None] * len(device_ids)
+            module_to_vals[orig_module]["out_act"] = [None] * len(device_ids)
+        module_to_vals[orig_module]["in_act"][
+            device_id_to_i_list[input[0].device.index]
+        ] = input
+        if hasattr(output, "register_hook"):
+            output = (output,)
+        module_to_vals[orig_module]["out_act"][
+            device_id_to_i_list[output[0].device.index]
+        ] = output
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(
+            partial(append_activations, orig_module=module)
+        )
+        handles.append(handle)
+    try:
+        _ = net(X)
+
+    finally:
+        for h in handles:
+            h.remove()
+    for m in module_to_vals:
+        # flatten nested list again
+        for key in ["in_act", "out_act"]:
+            module_to_vals[m][key] = [t for l in module_to_vals[m][key] for t in l]
+    return module_to_vals
+
+
+def get_in_out_acts_and_in_out_grads_per_module(
+    net, X, loss_fn, wanted_modules=None, **backward_kwargs
+):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    data_parallel = hasattr(net, "device_ids")
+    module_to_vals = {m: {} for m in wanted_modules}
+    if data_parallel:
+        device_ids = net.device_ids
+    else:
+        device_ids = [X.device.index]
+    device_id_to_i_list = {device_id: i for i, device_id in enumerate(device_ids)}
 
     handles = []
 
-    def append_grads(module, grad_input, grad_output):
+    def append_grads(orig_module, grad_input, grad_output):
         if grad_output is not None:
-            if "out_grad" not in module_to_vals[module]:
-                module_to_vals[module]["out_grad"] = []
-            module_to_vals[module]["out_grad"].append(grad_output)
+            if "out_grad" not in module_to_vals[orig_module]:
+                module_to_vals[orig_module]["out_grad"] = [None] * len(device_ids)
+            module_to_vals[orig_module]["out_grad"][
+                device_id_to_i_list[grad_output[0].device.index]
+            ] = grad_output
         else:
             assert grad_input is not None
-            if "in_grad" not in module_to_vals[module]:
-                module_to_vals[module]["in_grad"] = []
-            module_to_vals[module]["in_grad"].append(grad_input)
+            if "in_grad" not in module_to_vals[orig_module]:
+                module_to_vals[orig_module]["in_grad"] = [None] * len(device_ids)
+            module_to_vals[orig_module]["in_grad"][
+                device_id_to_i_list[grad_input[0].device.index]
+            ] = grad_input
 
-    def append_activations(module, input, output):
-        if data_parallel:
-            module_to_vals[module] = {}
-        else:
-            assert "in_act" not in module_to_vals[module]
-            assert "out_act" not in module_to_vals[module]
-        module_to_vals[module]["in_act"] = input
+    def append_activations(module, input, output, orig_module):
+        is_replica = (
+            hasattr(module, "_is_replica") and module._is_replica
+        )  # just for checks
+        assert data_parallel == is_replica
+        if not data_parallel:
+            assert "in_act" not in module_to_vals[orig_module]
+            assert "out_act" not in module_to_vals[orig_module]
+        if "in_act" not in module_to_vals[orig_module]:
+            module_to_vals[orig_module]["in_act"] = [None] * len(device_ids)
+            module_to_vals[orig_module]["out_act"] = [None] * len(device_ids)
+        module_to_vals[orig_module]["in_act"][
+            device_id_to_i_list[input[0].device.index]
+        ] = input
         if hasattr(output, "register_hook"):
             output = (output,)
-        module_to_vals[module]["out_act"] = output
+        module_to_vals[orig_module]["out_act"][
+            device_id_to_i_list[output[0].device.index]
+        ] = output
 
         for a_output in output:
             if a_output is None:
@@ -114,7 +185,7 @@ def get_in_out_acts_and_in_out_grads_per_module(
             handle = a_output.register_hook(
                 partial(
                     append_grads,
-                    module,
+                    orig_module,
                     None,
                 )
             )
@@ -124,14 +195,16 @@ def get_in_out_acts_and_in_out_grads_per_module(
             handle = a_input.register_hook(
                 partial(
                     append_grads,
-                    module,
+                    orig_module,
                     grad_output=None,
                 )
             )
             handles.append(handle)
 
     for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
+        handle = module.register_forward_hook(
+            partial(append_activations, orig_module=module)
+        )
         handles.append(handle)
     try:
         output = net(X)
@@ -140,38 +213,10 @@ def get_in_out_acts_and_in_out_grads_per_module(
     finally:
         for h in handles:
             h.remove()
-    return module_to_vals
-
-
-def get_in_out_activations_per_module(net, X, wanted_modules=None, data_parallel=False):
-    if wanted_modules is None:
-        wanted_modules = net.modules()
-
-    if data_parallel:
-        module_to_vals = {}
-    else:
-        module_to_vals = {m: {} for m in wanted_modules}
-
-    def append_activations(module, input, output):
-        if data_parallel:
-            module_to_vals[module] = {}
-        else:
-            assert "in_act" not in module_to_vals[module]
-            assert "out_act" not in module_to_vals[module]
-        module_to_vals[module]["in_act"] = input
-        if hasattr(output, "register_hook"):
-            output = (output,)
-        module_to_vals[module]["out_act"] = output
-
-    handles = []
-    for module in wanted_modules:
-        handle = module.register_forward_hook(append_activations)
-        handles.append(handle)
-    try:
-        _ = net(X)
-    finally:
-        for h in handles:
-            h.remove()
+    for m in module_to_vals:
+        # flatten nested list again
+        for key in ["in_act", "out_act",]:# "in_grad", "out_grad"]:
+            module_to_vals[m][key] = [t for l in module_to_vals[m][key] for t in l]
     return module_to_vals
 
 
@@ -200,7 +245,8 @@ def conv_grad_groups(module, in_act, out_grad):
 
 def scaled_conv_grad(module, in_act, out_grad, conv_grad_fn):
     grad_on_computed_weight, grad_on_bias = conv_batch_grad(
-        module, in_act, out_grad, conv_grad_fn=conv_grad_fn)
+        module, in_act, out_grad, conv_grad_fn=conv_grad_fn
+    )
     grad_weight_before_gain = grad_on_computed_weight.squeeze(0) * module.gain
     grad_weight_before_scale = grad_weight_before_gain * module.scale
     grad_weight_before_mean = grad_weight_before_scale - th.mean(
@@ -217,9 +263,9 @@ def scaled_conv_grad(module, in_act, out_grad, conv_grad_fn):
     grad_outer_w_flat = th.flatten(grad_outer_w, start_dim=2)
     std = th.std(w, dim=[1, 2, 3], keepdim=True, unbiased=False)
     grad_w_s = (
-            0.5
-            * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True))
-            / (n_params_per_w * th.sqrt(std * std))
+        0.5
+        * (2 * w - 2 * th.mean(w, dim=(1, 2, 3), keepdim=True))
+        / (n_params_per_w * th.sqrt(std * std))
     )
     grad_w_1_div_s = -(1 / ((std + eps) * (std + eps))) * grad_w_s
     grad_w_1_div_s_flat = th.flatten(grad_w_1_div_s, start_dim=1)
@@ -228,7 +274,7 @@ def scaled_conv_grad(module, in_act, out_grad, conv_grad_fn):
     grad_on_factor_per_w_p = grad_outer_w_flat * flat_w.unsqueeze(0)
 
     grad_on_w_through_std = (
-            grad_on_factor_per_w_p.sum(dim=2, keepdim=True) * grad_w_1_div_s_flat
+        grad_on_factor_per_w_p.sum(dim=2, keepdim=True) * grad_w_1_div_s_flat
     ).reshape(n_x, *w.shape)
 
     grad_on_w_direct = grad_outer_w * (1 / (std.unsqueeze(0) + eps))
@@ -268,10 +314,12 @@ def conv_backward(
     if isinstance(padding, int):
         padding = (padding,) * nd
     if isinstance(padding, str):
-        if padding == 'same':
+        if padding == "same":
             padding = tuple(np.array(kernel_size) // 2)
-        elif padding == 'valid':
-            padding (0,) * nd
+        elif padding == "valid":
+            padding(
+                0,
+            ) * nd
         else:
             raise ValueError(f"Unknown padding {padding:s}")
 
@@ -327,8 +375,8 @@ def conv_backward(
     return weight_bgrad, bias_bgrad
 
 
-def conv_batch_grad(module, in_act, out_grad, conv_grad_fn='loop'):
-    #assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
+def conv_batch_grad(module, in_act, out_grad, conv_grad_fn="loop"):
+    # assert np.all(np.array(module.kernel_size) // 2 == np.array(module.padding))
     # recreated_weight_batch_grad = th.nn.functional.conv2d(
     #     in_act.view(-1, 1, *in_act.shape[2:]),
     #     out_grad.view(-1, 1, *out_grad.shape[2:]),
@@ -346,15 +394,14 @@ def conv_batch_grad(module, in_act, out_grad, conv_grad_fn='loop'):
     # # n_out_before_stride = np.array(in_act.shape[2:]) - (
     # #        np.array(module.kernel_size) + 1 + np.array(module.padding) * 2)
     # # n_removed_by_stride =
-    if conv_grad_fn == 'loop':
-        weight_batch_grad = conv_weight_grad_loop(
-            module, in_act, out_grad)
-    elif conv_grad_fn == 'backpack':
+    if conv_grad_fn == "loop":
+        weight_batch_grad = conv_weight_grad_loop(module, in_act, out_grad)
+    elif conv_grad_fn == "backpack":
         weight_batch_grad = conv_weight_grad_backpack(module, in_act, out_grad)
 
     bias_batch_grad = out_grad.sum(dim=(-2, -1))
-    #print("hi")
-    #weight_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
+    # print("hi")
+    # weight_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
     return weight_batch_grad, bias_batch_grad
 
 
@@ -421,9 +468,10 @@ def conv_weight_grad_backpack(module, in_act, out_grad):
 
 
 def conv_weight_grad_loop(module, in_act, out_grad):
-    grads = [conv_weight_grad(
-            module, in_act[i_ex : i_ex + 1], out_grad[i_ex : i_ex + 1]
-        ) for i_ex in range(len(in_act))]
+    grads = [
+        conv_weight_grad(module, in_act[i_ex : i_ex + 1], out_grad[i_ex : i_ex + 1])
+        for i_ex in range(len(in_act))
+    ]
     return th.stack(grads)
 
 
@@ -432,9 +480,9 @@ def conv_weight_grad(module, in_act, out_grad):
     if isinstance(padding, int):
         padding = (padding,) * (in_act.ndim - 2)
     if isinstance(padding, str):
-        if padding == 'same':
+        if padding == "same":
             padding = tuple(np.array(module.kernel_size) // 2)
-        elif padding == 'valid':
+        elif padding == "valid":
             padding = (0,) * (in_act.ndim - 2)
         else:
             raise ValueError(f"Unknown padding {padding:s}")
@@ -516,8 +564,10 @@ def grad_out_act(m, x_m_vals, ref_m_vals):
 def grad_in_act(m, x_m_vals, ref_m_vals):
     return list(zip(x_m_vals["in_grad"], ref_m_vals["in_grad"]))
 
+
 def in_act(m, x_m_vals, ref_m_vals):
     return list(zip(x_m_vals["in_act"], ref_m_vals["in_act"]))
+
 
 def out_act(m, x_m_vals, ref_m_vals):
     return list(zip(x_m_vals["out_act"], ref_m_vals["out_act"]))
@@ -594,7 +644,9 @@ def grad_in_act_act_same_sign_masked(m, x_m_vals, ref_m_vals):
     return vals
 
 
-def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups, renorm_grads=False):
+def unfolded_grads(
+    m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups, renorm_grads=False
+):
     assert m.__class__.__name__ in [
         "BatchNorm2d",
         "Conv2d",
@@ -610,8 +662,12 @@ def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups, renor
 
     eps = 1e-20
     ref_square_grads = th.square(ref_m_vals["out_grad"][0])
-    sum_squared_out_grads = th.sum(
-        ref_square_grads, dim=tuple(range(1, ref_square_grads.ndim)), keepdim=True) + eps
+    sum_squared_out_grads = (
+        th.sum(
+            ref_square_grads, dim=tuple(range(1, ref_square_grads.ndim)), keepdim=True
+        )
+        + eps
+    )
     ref_out_grads = ref_m_vals["out_grad"][0]
     simple_out_grads = x_m_vals["out_grad"][0]
     if renorm_grads:
@@ -619,13 +675,10 @@ def unfolded_grads(m, x_m_vals, ref_m_vals, conv_grad_fn=conv_grad_groups, renor
         simple_out_grads = simple_out_grads / th.sqrt(sum_squared_out_grads)
         ref_square_grads = ref_square_grads / sum_squared_out_grads
 
-
     w_g_x_2, b_g_x_2 = grad_fn(
         m, th.square(x_m_vals["in_act"][0]), th.square(simple_out_grads)
     )
-    w_g_r_2, b_g_r_2 = grad_fn(
-        m, th.square(ref_m_vals["in_act"][0]), ref_square_grads
-    )
+    w_g_r_2, b_g_r_2 = grad_fn(m, th.square(ref_m_vals["in_act"][0]), ref_square_grads)
     w_g_x_r, b_g_x_r = grad_fn(
         m,
         x_m_vals["in_act"][0] * ref_m_vals["in_act"][0],
@@ -665,7 +718,12 @@ def cos_dist_unfolded_grads(w_x_tuple, w_r_tuple, eps):
 
 
 def gradparam_per_batch(m, vals, conv_grad_fn):
-    assert m.__class__.__name__ in ["BatchNorm2d", "Conv2d", "Linear", "ScaledStdConv2d"]
+    assert m.__class__.__name__ in [
+        "BatchNorm2d",
+        "Conv2d",
+        "Linear",
+        "ScaledStdConv2d",
+    ]
     grad_fn = {
         "BatchNorm2d": bnorm_batch_grad,
         "Conv2d": partial(conv_batch_grad, conv_grad_fn=conv_grad_fn),
@@ -673,16 +731,14 @@ def gradparam_per_batch(m, vals, conv_grad_fn):
         "ScaledStdConv2d": partial(scaled_conv_grad, conv_grad_fn=conv_grad_fn),
     }[m.__class__.__name__]
 
-    grad_tuple = grad_fn(
-        m, vals["in_act"][0], vals["out_grad"][0]
-    )
-    assert len(grad_tuple) in [2,3]
+    grad_tuple = grad_fn(m, vals["in_act"][0], vals["out_grad"][0])
+    assert len(grad_tuple) in [2, 3]
     grads = {}
     if m.weight is not None:
         grads["weight"] = grad_tuple[0]
     if m.bias is not None:
         grads["bias"] = grad_tuple[1]
-    if hasattr(m, 'gain') and m.gain is not None:
+    if hasattr(m, "gain") and m.gain is not None:
         grads["gain"] = grad_tuple[2]
     return grads
 
@@ -696,7 +752,12 @@ def gradparam(m, x_m_vals, ref_m_vals):
 
 
 def gradparam_relued(m, x_m_vals, ref_m_vals):
-    assert m.__class__.__name__ in ["ScaledStdConv2d", "BatchNorm2d", "Conv2d", "Linear"]
+    assert m.__class__.__name__ in [
+        "ScaledStdConv2d",
+        "BatchNorm2d",
+        "Conv2d",
+        "Linear",
+    ]
     x_grads = gradparam_per_batch(m, x_m_vals)
     ref_grads = gradparam_per_batch(m, ref_m_vals)
 
@@ -712,7 +773,12 @@ def gradparam_relued(m, x_m_vals, ref_m_vals):
 
 
 def gradparam_param(m, x_m_vals, ref_m_vals, conv_grad_fn):
-    assert m.__class__.__name__ in ["ScaledStdConv2d", "BatchNorm2d", "Conv2d", "Linear"]
+    assert m.__class__.__name__ in [
+        "ScaledStdConv2d",
+        "BatchNorm2d",
+        "Conv2d",
+        "Linear",
+    ]
     x_grads = gradparam_per_batch(m, x_m_vals, conv_grad_fn=conv_grad_fn)
     ref_grads = gradparam_per_batch(m, ref_m_vals, conv_grad_fn=conv_grad_fn)
 
@@ -791,7 +857,6 @@ def compute_dist(
     flatten_before=True,
     per_module=False,
     per_model=False,
-
 ):
     per_val = (not per_module) and (not per_model)
     dists = []
@@ -815,12 +880,12 @@ def compute_dist(
                 val_x_all.append(val_x)
                 val_ref_all.append(val_ref)
         if per_module:
-            dist = dist_fn(th.cat(val_x_for_module, dim=1),
-                           th.cat(val_ref_for_module, dim=1))
+            dist = dist_fn(
+                th.cat(val_x_for_module, dim=1), th.cat(val_ref_for_module, dim=1)
+            )
             dists.append(dist)
     if per_model:
-        dist = dist_fn(th.cat(val_x_all, dim=1),
-                       th.cat(val_ref_all, dim=1))
+        dist = dist_fn(th.cat(val_x_all, dim=1), th.cat(val_ref_all, dim=1))
         dists.append(dist)
 
     return dists
@@ -864,7 +929,10 @@ def mse_loss(x, *args, **kwargs):
     )
 
 
-def l1_dist(a,b,):
+def l1_dist(
+    a,
+    b,
+):
     return th.sum(th.abs(a - b), dim=tuple(range(1, len(a.shape))))
 
 
@@ -889,27 +957,31 @@ def normed_mse(val_x, val_ref, *args, **kwargs):
     return mses / th.mean(val_ref * val_ref, dim=tuple(range(1, len(val_x.shape))))
 
 
-def normed_sse(x_vals, ref_vals, eps=1e-15):
-    diffs = th.sum(th.square(x_vals - ref_vals),
-                   dim=tuple(range(1, len(x_vals.shape))))
-    sum_squares = th.sum(th.square(ref_vals),
-                         dim=tuple(range(1, len(x_vals.shape))))
+def normed_sse(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     return diffs / (sum_squares + eps)
 
 
-def normed_l1(x_vals, ref_vals, eps=1e-15):
-    diffs = th.sum(th.abs(x_vals - ref_vals),
-                   dim=tuple(range(1, len(x_vals.shape))))
-    sum_abs = th.sum(th.abs(ref_vals),
-                         dim=tuple(range(1, len(x_vals.shape))))
+def normed_sse_detached_norm(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    return diffs / (sum_squares + eps).detach()
+
+
+def normed_l1(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sum(th.abs(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    sum_abs = th.sum(th.abs(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     return diffs / (sum_abs + eps)
 
 
-def normed_sqrt_sse(x_vals, ref_vals, eps=1e-15):
-    diffs = th.sqrt(th.sum(th.square(x_vals - ref_vals),
-                   dim=tuple(range(1, len(x_vals.shape)))))
-    sum_squares = th.sqrt(th.sum(th.square(ref_vals),
-                         dim=tuple(range(1, len(x_vals.shape)))) + eps)
+def normed_sqrt_sse(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sqrt(
+        th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    )
+    sum_squares = th.sqrt(
+        th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape)))) + eps
+    )
     return diffs / sum_squares
 
 

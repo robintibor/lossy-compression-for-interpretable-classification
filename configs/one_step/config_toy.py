@@ -34,7 +34,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/unfolded-grad/stripes/", #before rebuttal without "icml-"
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/toy-gradactmatch/", #before rebuttal without "icml-"
                            #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -63,7 +63,7 @@ def get_grid_param_list():
 
 
     data_params = dictlistprod({
-        'dataset': ['stripes' ],#, 'mnist', 'fashionmnist', 'svhn'],
+        'dataset': ['stripes'],#, 'mnist', 'fashionmnist', 'svhn'],[#, "mnist_fashion", "mnist_cifar"
         'mimic_cxr_target': [None],
         #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
@@ -72,7 +72,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             #"n_epochs": [20],
-            "n_epochs": [100],
+            "n_epochs": [10],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -80,15 +80,17 @@ def get_grid_param_list():
             "ssl_loss_factor": [None],
             "loss_name": ['grad_act_match'],
             "grad_from_orig": [True],
+            "use_expected_loss": [True,],  # False
         }
     )
 
-    noise_params = [{
-            "noise_augment_level": 0,
-            'trivial_augment': False,
-            'extra_augs': False,
+    noise_params =dictlistprod(
+        {
+            "noise_augment_level": [1e-3,1e-2,1e-1],#0,
+            "trivial_augment": [False],
+            "extra_augs": [False],
         },
-    ]
+    )
 
     quantize_params = [
         {
@@ -134,7 +136,8 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0,1,2,4,],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [0.6,0.8],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            # ,0.6,1.0,1.4
         }
     )
 

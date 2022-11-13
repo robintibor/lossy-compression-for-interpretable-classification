@@ -100,11 +100,13 @@ def get_dataset(
     mimic_cxr_target=None,
     reverse=False,
     stripes_factor=0.15,
+    num_workers=2,
 ):
     if dataset.lower() in [
         "mnist_fashion",
         "stripes",
         "mnist_cifar",
+        "stripes_imagenet"
     ]:
         from lossy.toy_datasets import load_dataset
         (
@@ -122,7 +124,11 @@ def get_dataset(
             stripes_factor=stripes_factor,
         )
         channel = 3
-        im_size = (32, 32)
+        if dataset.lower()  == 'stripes_imagenet':
+            im_size = (224,224)
+        else:
+            im_size = (32, 32)
+
         class_names = None # ignore
         return (
             channel,
@@ -381,17 +387,17 @@ def get_dataset(
         dst_train = torch.utils.data.Subset(deepcopy(dst_train), np.arange(0, n_split))
 
     trainloader = torch.utils.data.DataLoader(
-        dst_train, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True
+        dst_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True
     )
     train_det_loader = torch.utils.data.DataLoader(
         dst_train,
         batch_size=eval_batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=num_workers,
         drop_last=False,
     )
     testloader = torch.utils.data.DataLoader(
-        dst_test, batch_size=eval_batch_size, shuffle=False, num_workers=2
+        dst_test, batch_size=eval_batch_size, shuffle=False, num_workers=num_workers
     )
     return (
         channel,

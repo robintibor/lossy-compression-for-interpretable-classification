@@ -61,8 +61,8 @@ def get_grid_param_list():
     # ]
 
     data_params = dictlistprod(
-        {
-            "dataset": ["cifar10", "mnist", "fashionmnist", "svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
+        {#"cifar10", "mnist", "fashionmnist",
+            "dataset": ["svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
             #'dataset': ['cifar10'],#, 'mnist'],
             "saved_model_folder": [
                 None
@@ -121,13 +121,14 @@ def get_grid_param_list():
     # # },
     # ]
 
-    noise_params = [
+    noise_params =dictlistprod(
         {
-            "noise_augment_level": 0,
-            "trivial_augment": False,
-            "extra_augs": False,
+            "noise_augment_level": [1e-3,1e-2,1e-1],#0,
+            "trivial_augment": [False],
+            "extra_augs": [False],
         },
-    ]
+    )
+
 
     quantize_params = [
         #     {
@@ -195,6 +196,7 @@ def get_grid_param_list():
             "activation": ["shifted_softplus_1"],
             "norm_simple_convnet": ["none"],
             "pooling": ["avgpooling"],
+            "external_pretrained_clf": [False],
         }
     )
 
@@ -217,9 +219,9 @@ def get_grid_param_list():
                 "adamw",
             ],
             "bpd_weight": [
-                0.7,
-                0.8,
-                0.9,
+                #0.7,
+                #0.8,
+                #0.9,
                 1.0
             ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
@@ -297,6 +299,7 @@ def run(
     dist_name,
     conv_grad_name,
     use_expected_loss,
+    external_pretrained_clf,
 ):
     if debug:
         n_epochs = 3
