@@ -62,7 +62,7 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {#"cifar10", "mnist", "fashionmnist",
-            "dataset": ["stripes"],  # , 'mnist', 'fashionmnist', 'svhn'],
+            "dataset": ["cifar10"],  # , 'mnist', 'fashionmnist', 'svhn'],
             #'dataset': ['cifar10'],#, 'mnist'],
             "saved_model_folder": [
                 None
@@ -76,7 +76,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [4],
+            "n_epochs": [10],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -84,18 +84,13 @@ def get_grid_param_list():
             "ssl_loss_factor": [None],
             "grad_from_orig": [True],  # True
             "clf_loss_name": ["expected_grad_loss"],  # False
-            "separate_orig_clf": [False],
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
-            "dist_name": ["normed_sse_detached_norm"],
             "conv_grad_name": ["loop"],  # loop backpack
-            "train_clf_on_dist_loss": [True],
-            "train_clf_on_orig_simultaneously": [True],
             "dist_threshold": [0.1,0.2,0.3,0.4],
-            "orig_loss_weight": [10],
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
-            "stop_clf_grad_through_simple": [False],
+            "simple_clf_loss_weight": [0,],
         }
     )
 
@@ -171,29 +166,12 @@ def get_grid_param_list():
         }
     )
 
-    # model_params = dictlistprod(
-    #     {
-    #         "depth": [16],
-    #         "widen_factor": [2],
-    #         "n_start_filters": [64],
-    #         "residual_preproc": [
-    #             True,
-    #         ],
-    #         "model_name": ["wide_nf_net"],
-    #         "adjust_betas": [False],
-    #         'save_models': [True],
-    #         'activation': ["shifted_softplus_1"],
-    #         "norm_simple_convnet": ['none'],
-    #         "pooling": ['avgpooling'],
-    #     }
-    # )
 
     model_params = dictlistprod(
         {
             "depth": [16],
             "widen_factor": [2],
             "n_start_filters": [64],
-            "preproc_name": ["res_unet",],#res_unet
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
             "save_models": [True],
@@ -205,6 +183,16 @@ def get_grid_param_list():
         }
     )
 
+    preproc_params = dictlistprod({
+
+        "lr_preproc": [1e-4,],
+            "preproc_name": ["glow", "glow_with_resnet"],#res_unet
+
+    }) + dictlistprod({
+        "lr_preproc": [5e-4,],
+            "preproc_name": ["res_unet",],#res_unet
+    })
+
     optim_params = dictlistprod(
         {
             "resample_augmentation": [False],  # default this was True
@@ -213,10 +201,6 @@ def get_grid_param_list():
             "weight_decay": [1e-5],#[1e-5],
             "lr_clf": [
                 1e-3,
-            ],  # 5e-4,
-            "lr_preproc": [
-                1e-4,
-                #5e-4,
             ],  # 5e-4,
             "threshold": [
                 0.1,
@@ -245,6 +229,7 @@ def get_grid_param_list():
             data_params,
             quantize_params,
             noise_params,
+            preproc_params,
         ]
     )
 
@@ -313,6 +298,7 @@ def run(
     glow_model_path_32x32,
     detach_bpd_factors,
     stop_clf_grad_through_simple,
+    simple_clf_loss_weight,
 ):
     if debug:
         n_epochs = 3

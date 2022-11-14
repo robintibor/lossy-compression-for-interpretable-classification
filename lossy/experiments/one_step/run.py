@@ -319,6 +319,7 @@ def run_exp(
     glow_model_path_32x32,
     detach_bpd_factors,
     stop_clf_grad_through_simple,
+    simple_clf_loss_weight,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
                           "ConvNet", "linear", "torchvision_resnet18"]
@@ -554,6 +555,7 @@ def run_exp(
             loss.backward()
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
+
     print("clf", clf)
     log.info("Start training...")
     if loss_name in ["grad_act_match", "gradparam_param"]:
@@ -744,6 +746,7 @@ def run_exp(
                 )
 
                 if simple_orig_pred_loss_weight > 0:
+                    assert not simple_clf_loss_weight > 0, "although theoretically possible"
                     simple_pred_loss_adjusted_weight = simple_orig_pred_loss_weight / (
                             simple_orig_pred_loss_weight + 1
                     )
@@ -765,6 +768,12 @@ def run_exp(
                 else:
                     clf_loss = th.zeros_like(dist_loss)
 
+                if simple_clf_loss_weight > 0:
+                    assert not simple_orig_pred_loss_weight > 0, "although theoretically possible"
+                    simple_clf_loss = th.nn.functional.cross_entropy(
+                        simple_acts_grads[wanted_modules[-1]]['out_act'][0],
+                        y)
+                    clf_loss = weighted_sum(1, 1, clf_loss, simple_clf_loss_weight, simple_clf_loss)
                 f_simple_loss_before = simple_to_orig_loss
                 f_simple_loss = dist_loss
                 f_orig_loss = clf_loss
