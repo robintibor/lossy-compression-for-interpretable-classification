@@ -30,6 +30,7 @@ from lossy.activation_match import grad_in_act_act
 from lossy.activation_match import gradparam_param
 from lossy.activation_match import normed_l1
 from lossy.activation_match import normed_sse
+from lossy.activation_match import normed_sse_detached_norm
 from lossy.activation_match import normed_sqrt_sse
 from lossy.activation_match import refed
 from lossy.activation_match import sse_loss
@@ -38,7 +39,8 @@ from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
 from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
-from lossy.glow import load_small_glow
+from lossy.glow import load_glow
+from lossy.glow_preproc import get_glow_preproc
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 from lossy.image_convert import img_0_1_to_glow_img, quantize_data
@@ -54,6 +56,8 @@ from lossy.util import set_random_seeds
 from lossy.util import weighted_sum
 from lossy.wide_nf_net import activation_fn
 from lossy.losses import expected_scaled_loss_mult
+from lossy.losses import expected_grad_loss
+from lossy.util import get_random_states, set_random_states
 
 
 from rtsutils.nb_util import Results
@@ -263,7 +267,6 @@ def run_exp(
     n_epochs,
     optim_type,
     n_start_filters,
-    residual_preproc,
     model_name,
     lr_preproc,
     lr_clf,
@@ -296,7 +299,6 @@ def run_exp(
     loss_name,
     grad_from_orig,
     mimic_cxr_target,
-    use_normed_loss,
     separate_orig_clf,
     simple_orig_pred_loss_weight,
     scale_dists_loss_by_n_vals,
@@ -306,12 +308,20 @@ def run_exp(
     pooling,
     dist_name,
     conv_grad_name,
-    use_expected_loss,
     external_pretrained_clf,
+    clf_loss_name,
+    orig_loss_weight,
+    pretrain_clf_epochs,
+    preproc_name,
+    train_clf_on_dist_loss,
+    train_clf_on_orig_simultaneously,
+    dist_threshold,
+    glow_model_path_32x32,
+    detach_bpd_factors,
+    stop_clf_grad_through_simple,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
                           "ConvNet", "linear", "torchvision_resnet18"]
-    assert not (use_normed_loss and use_expected_loss)
     if saved_model_folder is not None:
         assert model_name in ["wide_nf_net", "ConvNet"]
     writer = SummaryWriter(output_dir)
@@ -347,6 +357,7 @@ def run_exp(
         split_test_off_train=split_test_off_train,
         first_n=first_n,
         mimic_cxr_target=mimic_cxr_target,
+        stripes_factor=0.3
     )
 
     log.info("Create classifier...")
@@ -375,70 +386,6 @@ def run_exp(
         im_size,
         external_pretrained_clf,
     )
-
-    if separate_orig_clf:
-        orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
-
-    if data_parallel:
-        clf = nn.DataParallel(clf)
-        orig_clf = nn.DataParallel(orig_clf)
-
-    log.info("Create preprocessor...")
-
-    def to_plus_minus_one(x):
-        return (x * 2) - 1
-
-    if residual_preproc:
-        preproc = WrapResidualIdentityUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGenerator(
-                    3,
-                    3,
-                    num_downs=5,
-                    final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                ),
-            ),
-            final_nonlin=nn.Sigmoid(),
-        ).cuda()
-    else:
-        preproc = nn.Sequential(
-            Expression(to_plus_minus_one),
-            UnetGenerator(
-                3,
-                3,
-                num_downs=5,
-                final_nonlin=nn.Sigmoid,
-                norm_layer=AffineOnChans,
-                nonlin_down=nn.ELU,
-                nonlin_up=nn.ELU,
-            ),
-            AffineOnChans(3),  # Does this even make sense after sigmoid?
-        ).cuda()
-
-    preproc_post = nn.Sequential()
-    if quantize_after_simplifier:
-        preproc_post.add_module(
-            "quantize", Expression(quantize_data))
-    if noise_after_simplifier:
-        preproc_post.add_module(
-            "add_glow_noise", Expression(add_glow_noise_to_0_1))
-    preproc = nn.Sequential(
-        preproc, preproc_post)
-
-    beta_preproc = (0.5, 0.99)
-
-    opt_preproc = torch.optim.Adam(
-        preproc.parameters(),
-        lr=lr_preproc,
-        weight_decay=5e-5,
-        betas=beta_preproc,
-    )
-    if data_parallel:
-        preproc = nn.DataParallel(preproc)
 
     def get_aug_m(X_shape, trivial_augment, std_aug_magnitude, extra_augs, im_size):
         noise = th.randn(*X_shape, device="cuda") * noise_augment_level
@@ -499,9 +446,17 @@ def run_exp(
             ),
         )
 
+    if separate_orig_clf:
+        orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
+
+    if data_parallel:
+        clf = nn.DataParallel(clf)
+        if separate_orig_clf:
+            orig_clf = nn.DataParallel(orig_clf)
+
     log.info("Load generative model...")
     if im_size == (32, 32):
-        glow = load_small_glow()
+        glow = load_glow(glow_model_path_32x32)
     elif im_size == (224, 224):
         large_gen = th.load('/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/large-res-glow/8/gen_2.th')
         glow = large_gen[1]
@@ -523,6 +478,82 @@ def run_exp(
     if data_parallel:
         gen = nn.DataParallel(gen)
 
+    log.info("Create preprocessor...")
+
+    def to_plus_minus_one(x):
+        return (x * 2) - 1
+
+    if preproc_name == 'res_unet':
+        preproc = WrapResidualIdentityUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGenerator(
+                    3,
+                    3,
+                    num_downs=5,
+                    final_nonlin=nn.Identity,
+                    norm_layer=AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                ),
+            ),
+            final_nonlin=nn.Sigmoid(),
+        ).cuda()
+    elif preproc_name == 'unet':
+        preproc = nn.Sequential(
+            Expression(to_plus_minus_one),
+            UnetGenerator(
+                3,
+                3,
+                num_downs=5,
+                final_nonlin=nn.Sigmoid,
+                norm_layer=AffineOnChans,
+                nonlin_down=nn.ELU,
+                nonlin_up=nn.ELU,
+            ),
+            AffineOnChans(3),  # Does this even make sense after sigmoid?
+        ).cuda()
+    elif preproc_name == 'glow':
+        preproc = get_glow_preproc(glow, resnet_encoder=False)
+    else:
+        assert preproc_name == 'glow_with_resnet'
+        preproc = get_glow_preproc(glow, resnet_encoder=True)
+    if preproc_name in ['glow', 'glow_with_resnet']:
+        for m in itertools.chain(glow.modules(), preproc.encoder.modules(), preproc.decoder.modules()):
+            if m.__class__.__name__ == 'AffineModifier':
+                m.eps = 5e-2
+
+    preproc_post = nn.Sequential()
+    if quantize_after_simplifier:
+        preproc_post.add_module(
+            "quantize", Expression(quantize_data))
+    if noise_after_simplifier:
+        preproc_post.add_module(
+            "add_glow_noise", Expression(add_glow_noise_to_0_1))
+    preproc = nn.Sequential(
+        preproc, preproc_post)
+
+    beta_preproc = (0.5, 0.99)
+
+    opt_preproc = torch.optim.Adam(
+        [p for p in preproc.parameters() if p.requires_grad],
+        lr=lr_preproc,
+        weight_decay=5e-5,
+        betas=beta_preproc,
+    )
+    if data_parallel:
+        preproc = nn.DataParallel(preproc)
+
+    for i_epoch in trange(pretrain_clf_epochs):
+        for X, y in tqdm(trainloader):
+            clf.train()
+            X = X.cuda()
+            y = y.cuda()
+            loss = th.nn.functional.cross_entropy(clf(X), y)
+            opt_clf.zero_grad(set_to_none=True)
+            loss.backward()
+            opt_clf.step()
+            opt_clf.zero_grad(set_to_none=True)
     print("clf", clf)
     log.info("Start training...")
     if loss_name in ["grad_act_match", "gradparam_param"]:
@@ -540,6 +571,7 @@ def run_exp(
         dist_fn = {
             "cosine_distance": partial(cosine_distance, eps=1e-15),
             "normed_sse": partial(normed_sse, eps=1e-15),
+            "normed_sse_detached_norm": partial(normed_sse_detached_norm, eps=1e-15),
             "sse": sse_loss,
             "normed_sqrt_sse": partial(normed_sqrt_sse, eps=1e-15),
             "normed_l1": partial(normed_l1, eps=1e-15),
@@ -573,7 +605,6 @@ def run_exp(
             X = X.cuda()
             X = X.requires_grad_(True)
             y = y.cuda()
-
             aug_m = get_aug_m(
                 X.shape,
                 trivial_augment=trivial_augment,
@@ -594,7 +625,6 @@ def run_exp(
                 opt_orig_clf.zero_grad(set_to_none=True)
                 batch_results['orig_clf_loss'] = orig_clf_loss.item()
 
-
             simple_X = preproc(X)
             simple_X_aug = aug_m(simple_X)
 
@@ -606,36 +636,49 @@ def run_exp(
                 loss_fn = lambda o: th.nn.functional.cross_entropy(
                     o, y, reduction="none"
                 )
-                if use_normed_loss:
+                if clf_loss_name == 'normed_loss':
                     loss_fn = grad_normed_loss(loss_fn)
-                elif use_expected_loss:
+                elif clf_loss_name == 'expected_loss':
                     unscaled_loss_fn = lambda o, y: th.nn.functional.cross_entropy(
                         o, y, reduction="none"
                     )
                     expected_scaled_loss_fn = expected_scaled_loss_mult(unscaled_loss_fn)
                     loss_fn = partial(expected_scaled_loss_fn, y=y)
+                elif clf_loss_name == 'expected_grad_loss':
+                    loss_fn = partial(expected_grad_loss, y=y)
                 else:
+                    assert clf_loss_name == 'normal_crossent'
                     unmeaned_loss_fn = loss_fn
                     loss_fn = lambda o: th.mean(unmeaned_loss_fn(o))
 
-                random_state = torch.get_rng_state()
+                random_states = get_random_states()
                 orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
                     clf_for_comparisons, X_aug, loss_fn, wanted_modules=wanted_modules,
+                    retain_graph=(train_clf_on_dist_loss or train_clf_on_orig_simultaneously)
                 )
-                orig_acts_grads = detach_acts_grads(orig_acts_grads)
+                if not (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                    orig_acts_grads = detach_acts_grads(orig_acts_grads)
 
                 set_grads_to_none(clf_for_comparisons.parameters())
 
-                assert False, "set cuda random state!!"
-                torch.set_rng_state(random_state)
+                set_random_states(random_states)
+                if train_clf_on_dist_loss and stop_clf_grad_through_simple:
+                    simple_clf_for_comparisons, simple_wanted_modules = deepcopy(
+                        (clf_for_comparisons, wanted_modules))
+                else:
+                    simple_clf_for_comparisons = clf_for_comparisons
+                    simple_wanted_modules = wanted_modules
                 if grad_from_orig:
                     simple_acts_grads = get_in_out_activations_per_module(
-                        clf_for_comparisons,
+                        simple_clf_for_comparisons,
                         simple_X_aug,
-                        wanted_modules=wanted_modules,
+                        wanted_modules=simple_wanted_modules,
                     )
-                    if (not separate_orig_clf) and (not use_normed_loss):
-
+                    if (not separate_orig_clf) and (loss_name == 'normal_crossent') and (
+                    not train_clf_on_orig_simultaneously):
+                        assert False, (
+                                "recheck this case, whether all exceptions are taken into account" +
+                                "and also then else case whether it makes sense")
                         # Compute and store gradients for classifier update
                         # loss = loss_fn(simple_acts_grads[wanted_modules[-1]]["out_act"][0])
                         loss = loss_fn(
@@ -648,20 +691,28 @@ def run_exp(
                             p.grad = grad
                 else:
                     simple_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
-                        clf_for_comparisons,
+                        simple_clf_for_comparisons,
                         simple_X_aug,
                         loss_fn,
-                        wanted_modules=wanted_modules,
+                        wanted_modules=simple_wanted_modules,
                         create_graph=True,
                     )
+                # Reco er the original modules to allow comparison between orig and simple
+                if train_clf_on_dist_loss:
+                    new_simple_acts_grads = {}
+                    for m, orig_m in zip(simple_acts_grads.keys(), wanted_modules):
+                        new_simple_acts_grads[orig_m] = simple_acts_grads[m]
+                    simple_acts_grads = new_simple_acts_grads
 
-                if (not separate_orig_clf) and (not use_normed_loss):
+                if ((not separate_orig_clf) and
+                        (loss_name == 'normal_crossent') and
+                        (not train_clf_on_orig_simultaneously)):
                     save_grads_to(clf.parameters(), "grad_tmp")
                 set_grads_to_none(clf_for_comparisons.parameters())
                 set_grads_to_none(clf.parameters())
                 set_grads_to_none(preproc.parameters())
                 set_grads_to_none([X])
-                dists_per_example = compute_dist(
+                dists = compute_dist(
                     dist_fn,
                     val_fn,
                     simple_acts_grads,
@@ -671,9 +722,10 @@ def run_exp(
                     per_model=per_model,
                 )
                 # for dataparallel
-                dists_per_example = [d.to(dists_per_example[0].device) for d in dists_per_example]
+                dists = [d.to(dists[0].device) for d in dists]
 
-                dists = torch.mean(torch.stack(dists_per_example), dim=1)
+                dists_per_layer = torch.mean(torch.stack(dists), dim=1)
+                dists_per_example = torch.mean(torch.stack(dists), dim=0)
                 if use_parameter_counts:
                     if not per_model:
                         p_counts = [
@@ -688,7 +740,7 @@ def run_exp(
                 dist_loss_weight = [1, len(dists)][scale_dists_loss_by_n_vals]
                 dist_loss = weighted_sum(
                     dist_loss_weight,
-                    *list(itertools.chain(*list(zip(p_counts, dists)))),
+                    *list(itertools.chain(*list(zip(p_counts, dists_per_layer)))),
                 )
 
                 if simple_orig_pred_loss_weight > 0:
@@ -705,30 +757,40 @@ def run_exp(
                     dist_loss = dist_loss / (simple_orig_pred_loss_weight + 1)
                 else:
                     simple_to_orig_loss = th.zeros_like(dist_loss)
+
+                if train_clf_on_orig_simultaneously:
+                    clf_loss = th.nn.functional.cross_entropy(
+                        orig_acts_grads[wanted_modules[-1]]['out_act'][0],
+                        y)
+                else:
+                    clf_loss = th.zeros_like(dist_loss)
+
                 f_simple_loss_before = simple_to_orig_loss
                 f_simple_loss = dist_loss
-                f_orig_loss = th.zeros_like(f_simple_loss)
-                bpd_factors = th.ones_like(X[:, 0, 0, 0])
+                f_orig_loss = clf_loss
+                if dist_threshold is not None:
+                    assert detach_bpd_factors is True, "this was more for keeping track of the fix in exps"
+                    bpd_factors = th.clamp((dist_threshold - dists_per_example) / 0.1, 0, 1).detach()
+                else:
+                    bpd_factors = th.ones_like(X[:, 0, 0, 0])
             else:
                 assert loss_name == "one_step"
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
                         f_clf,
                         f_opt_clf,
                 ):
-                    random_state = torch.get_rng_state()
+                    random_states = get_random_states()
                     f_simple_out = f_clf(simple_X_aug)
                     f_simple_loss_before = th.nn.functional.cross_entropy(
                         f_simple_out, y
                     )
                     f_opt_clf.step(f_simple_loss_before)
 
-                assert False, "set cuda random state!!"
-                torch.set_rng_state(random_state)
+                set_random_states(random_states)
                 f_simple_out = f_clf(simple_X_aug)
                 f_simple_loss = th.nn.functional.cross_entropy(f_simple_out, y)
 
-                assert False, "set cuda random state!!"
-                torch.set_rng_state(random_state)
+                set_random_states(random_state)
                 f_orig_out = f_clf(X_aug)
                 f_orig_loss_per_ex = th.nn.functional.cross_entropy(
                     f_orig_out, y, reduction="none"
@@ -737,7 +799,6 @@ def run_exp(
                 bpd_factors = (
                         (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
                 ).detach()
-
             bpd = get_bpd(gen, simple_X)
             bpd_loss = th.mean(bpd * bpd_factors)
             im_loss = weighted_sum(
@@ -746,7 +807,7 @@ def run_exp(
                 f_simple_loss_before,
                 1,
                 f_simple_loss,
-                10,
+                orig_loss_weight,
                 f_orig_loss,
                 bpd_weight,
                 bpd_loss,
@@ -759,21 +820,30 @@ def run_exp(
                 bpd_loss=bpd_loss.item(),
             )
 
+            if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                opt_clf.zero_grad(set_to_none=True)
             opt_preproc.zero_grad(set_to_none=True)
             im_loss.backward()
             if th.isfinite(bpd).all().item() and grads_all_finite(opt_preproc):
+                batch_results['grad_bpd_finite'] = 1
                 opt_preproc.step()
+                if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                    opt_clf.step()
+            else:
+                batch_results['grad_bpd_finite'] = 0
+            if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                opt_clf.zero_grad(set_to_none=True)
             opt_preproc.zero_grad(set_to_none=True)
 
             if (
                     loss_name
                     in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
                     and (not separate_orig_clf)
-                    and (not use_normed_loss)
-                    and (not use_expected_loss)
+                    and (loss_name == 'normal_crossent')
+                    and (not train_clf_on_orig_simultaneously)
             ):
                 restore_grads_from(clf.parameters(), "grad_tmp")
-            else:
+            elif not (train_clf_on_orig_simultaneously):
                 # Classifier training
                 if resample_augmentation_for_clf:
                     aug_m = get_aug_m(
@@ -786,7 +856,7 @@ def run_exp(
                     simple_X = preproc(X)
                     simple_X_aug = aug_m(simple_X)
 
-                torch.set_rng_state(random_state)
+                set_random_states(random_states)
                 # z_simple = clf[1].compute_features(clf[0](simple_X_aug))
                 # out = clf[1].linear(z_simple)
                 out = clf(simple_X_aug)
@@ -818,8 +888,9 @@ def run_exp(
                 opt_clf.zero_grad(set_to_none=True)
                 clf_loss.backward()
                 batch_results['clf_loss_simple_train'] = clf_loss.item()
-            opt_clf.step()
-            opt_clf.zero_grad(set_to_none=True)
+            if not (train_clf_on_orig_simultaneously):
+                opt_clf.step()
+                opt_clf.zero_grad(set_to_none=True)
             nb_res.collect(**batch_results)
         clf.eval()
         log.info(f"Epoch {i_epoch:d}")
@@ -916,7 +987,6 @@ def run_exp(
                 os.path.join(output_dir, "X_preproced.png"),
                 nrow=int(np.sqrt(len(X_preproced))),
             )
-
         if save_models:
             th.save(
                 preproc.state_dict(), os.path.join(output_dir, "preproc_state_dict.th")
@@ -941,7 +1011,6 @@ if __name__ == "__main__":
     depth = 16
     widen_factor = 2
     n_start_filters = 64
-    residual_preproc = True
     model_name = "wide_nf_net"
     adjust_betas = False
     save_models = True
@@ -966,7 +1035,6 @@ if __name__ == "__main__":
         n_epochs,
         optim_type,
         n_start_filters,
-        residual_preproc,
         model_name,
         lr_preproc,
         lr_clf,

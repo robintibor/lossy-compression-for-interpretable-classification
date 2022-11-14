@@ -1,10 +1,18 @@
-import torch as th
-import numpy as np
 import random
-import torch
-from warnings import warn
-
 from itertools import zip_longest
+
+import numpy as np
+import torch
+import torch as th
+
+
+def get_random_states():
+    return th.random.get_rng_state(), th.cuda.get_rng_state()
+
+
+def set_random_states(random_states):
+    th.random.set_rng_state(random_states[0])
+    th.cuda.set_rng_state(random_states[1])
 
 
 def np_to_th(

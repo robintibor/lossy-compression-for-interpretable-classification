@@ -1,6 +1,17 @@
 import torch as th
 
 
+def expected_grad_loss(out,y, dim=1):
+    # same as cross ent on probabilties moved to half point between uniform
+    # and predicted
+    with th.no_grad():
+        softmaxed = th.softmax(out, dim=dim)
+        smoothed = (softmaxed + 1/out.shape[dim]) / 2
+        grads = smoothed - th.nn.functional.one_hot(y, num_classes=out.shape[dim])
+    loss = th.mean(th.sum(grads * out, dim=dim))
+    return loss
+
+
 def expected_scaled_loss(unscaled_loss_fn, n_samples=100):
     def expected_scaled_loss_fn(out):
         losses = []

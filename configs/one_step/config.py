@@ -62,7 +62,7 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {#"cifar10", "mnist", "fashionmnist",
-            "dataset": ["svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
+            "dataset": ["stripes"],  # , 'mnist', 'fashionmnist', 'svhn'],
             #'dataset': ['cifar10'],#, 'mnist'],
             "saved_model_folder": [
                 None
@@ -76,20 +76,26 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [100],
+            "n_epochs": [4],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
             "train_ssl_orig_simple": [False],
             "ssl_loss_factor": [None],
             "grad_from_orig": [True],  # True
-            "use_normed_loss": [False],  # False
-            "use_expected_loss": [False,],  # False
-            "separate_orig_clf": [True],
+            "clf_loss_name": ["expected_grad_loss"],  # False
+            "separate_orig_clf": [False],
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
-            "dist_name": ["normed_sse"],
+            "dist_name": ["normed_sse_detached_norm"],
             "conv_grad_name": ["loop"],  # loop backpack
+            "train_clf_on_dist_loss": [True],
+            "train_clf_on_orig_simultaneously": [True],
+            "dist_threshold": [0.1,0.2,0.3,0.4],
+            "orig_loss_weight": [10],
+            "pretrain_clf_epochs": [0],
+            "detach_bpd_factors": [True],
+            "stop_clf_grad_through_simple": [False],
         }
     )
 
@@ -123,7 +129,7 @@ def get_grid_param_list():
 
     noise_params =dictlistprod(
         {
-            "noise_augment_level": [1e-3,1e-2,1e-1],#0,
+            "noise_augment_level": [1e-3],#0,
             "trivial_augment": [False],
             "extra_augs": [False],
         },
@@ -187,9 +193,7 @@ def get_grid_param_list():
             "depth": [16],
             "widen_factor": [2],
             "n_start_filters": [64],
-            "residual_preproc": [
-                True,
-            ],
+            "preproc_name": ["res_unet",],#res_unet
             "model_name": ["wide_nf_net"],
             "adjust_betas": [False],
             "save_models": [True],
@@ -197,6 +201,7 @@ def get_grid_param_list():
             "norm_simple_convnet": ["none"],
             "pooling": ["avgpooling"],
             "external_pretrained_clf": [False],
+            "glow_model_path_32x32": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"], #/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th
         }
     )
 
@@ -205,12 +210,13 @@ def get_grid_param_list():
             "resample_augmentation": [False],  # default this was True
             "resample_augmentation_for_clf": [False],  # default this was False
             "std_aug_magnitude": [None],  # 0.25
-            "weight_decay": [1e-5],
+            "weight_decay": [1e-5],#[1e-5],
             "lr_clf": [
                 1e-3,
             ],  # 5e-4,
             "lr_preproc": [
-                5e-4,
+                1e-4,
+                #5e-4,
             ],  # 5e-4,
             "threshold": [
                 0.1,
@@ -222,7 +228,7 @@ def get_grid_param_list():
                 #0.7,
                 #0.8,
                 #0.9,
-                1.0
+                0.5,
             ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
@@ -254,7 +260,6 @@ def run(
     n_epochs,
     optim_type,
     n_start_filters,
-    residual_preproc,
     lr_preproc,
     lr_clf,
     threshold,
@@ -287,7 +292,6 @@ def run(
     loss_name,
     grad_from_orig,
     mimic_cxr_target,
-    use_normed_loss,
     separate_orig_clf,
     simple_orig_pred_loss_weight,
     first_n,
@@ -298,8 +302,17 @@ def run(
     pooling,
     dist_name,
     conv_grad_name,
-    use_expected_loss,
     external_pretrained_clf,
+    clf_loss_name,
+    orig_loss_weight,
+    pretrain_clf_epochs,
+    preproc_name,
+    train_clf_on_dist_loss,
+    train_clf_on_orig_simultaneously,
+    dist_threshold,
+    glow_model_path_32x32,
+    detach_bpd_factors,
+    stop_clf_grad_through_simple,
 ):
     if debug:
         n_epochs = 3

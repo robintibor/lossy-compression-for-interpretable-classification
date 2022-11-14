@@ -963,6 +963,12 @@ def normed_sse(x_vals, ref_vals, eps=1e-20):
     return diffs / (sum_squares + eps)
 
 
+def normed_sse_one_sided(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sum(th.square(th.nn.functional.relu(ref_vals - x_vals)), dim=tuple(range(1, len(x_vals.shape))))
+    sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    return diffs / (sum_squares + eps)
+
+
 def normed_sse_detached_norm(x_vals, ref_vals, eps=1e-20):
     diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
