@@ -7,11 +7,55 @@ import numpy as np
 import torch as th
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset
+import pickle
 
 from lossy.mimic_cxr import MIMIC_CXR_JPG
 from lossy import data_locations
-
+from typing import Optional, Callable
+from PIL import Image
 from torchvision.datasets.imagenet import *
+
+class ImageNet32(torchvision.datasets.VisionDataset):
+    def __init__(
+            self,
+            root,
+            train,
+            transforms: Optional[Callable] = None,
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            ):
+        super().__init__(
+            root, transforms=transforms, transform=transform, target_transform=target_transform)
+        if train:
+            dataset_dicts = []
+            for i_batch in range(1,11):
+                with open(os.path.join(root, f'train_data_batch_{i_batch}'), 'rb') as fo:
+                    batch_dict = pickle.load(fo)
+                    dataset_dicts.append(batch_dict)
+        else:
+            with open(os.path.join(root, 'val_data'), 'rb') as fo:
+                batch_dict = pickle.load(fo)
+            dataset_dicts = [batch_dict]
+        # -1 to go from 1-based to 0-based indexing
+        labels = np.concatenate([d['labels'] for d in dataset_dicts]) - 1
+        data = np.vstack([d['data'] for d in dataset_dicts]).reshape(-1, 3, 32, 32)
+        self.data = data
+        self.labels = labels
+        class_names = [line.split()[-1] for line in open(
+            os.path.join(self.root, 'map_clsloc.txt'), 'r').read().split('\n')[:-1]]
+        self.classes = class_names
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img_arr = self.data[idx]
+        label = self.labels[idx]
+        im = Image.fromarray(img_arr.transpose(1,2,0))
+        if self.transforms is not None:
+            im, label = self.transforms(im, label)
+        return im, label
+
 
 
 class ImageNet(ImageFolder):
@@ -257,6 +301,18 @@ def get_dataset(
         dst_test = torchvision.datasets.CIFAR100(
             data_path, train=False, download=True, transform=transform
         )
+        class_names = dst_train.classes
+    elif dataset == "IMAGENET32":
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 1000
+        assert not standardize
+        transform = transforms.Compose(
+            [transforms.ToTensor()]
+        )
+        imagenet_32_dir = '/work/dlclarge2/schirrmr-lossy-compression/imagenet-32'
+        dst_train = ImageNet32(imagenet_32_dir, train=True, transform=transform)
+        dst_test = ImageNet32(imagenet_32_dir, train=False, transform=transform)
         class_names = dst_train.classes
     elif dataset == "USPS":
         channel = 3

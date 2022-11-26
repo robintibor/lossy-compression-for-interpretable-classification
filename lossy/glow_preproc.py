@@ -2,7 +2,63 @@ from copy import deepcopy
 from lossy.image_convert import glow_img_to_img_0_1
 from lossy.image_convert import img_0_1_to_glow_img
 from torch import nn
+import torch as th
+import numpy as np
 from lossy.wide_nf_net import wide_basic
+from lossy.image2image import WrapResidualNonSigmoidUnet
+from lossy.image2image import UnetGeneratorCompact
+from lossy.affine import AffineOnChans
+
+
+class OnTopOfGlowPreproc(nn.Module):
+    def __init__(self, glow, out_shapes):
+        self.glow = [glow] # don't want to show up in parameters
+        self.out_shapes = out_shapes
+        flatten_modules = []
+        for m in glow.modules():
+            if m.__class__.__name__ == 'Flatten2d':
+                flatten_modules.append(m)
+        self.flatten_modules = flatten_modules
+        super().__init__()
+        self.downsampler_0_1 = nn.Conv2d(out_shapes[0][0], out_shapes[1][0], (2,2), stride=(2,2)).cuda()
+        self.downsampler_0_2 = nn.Conv2d(out_shapes[0][0], out_shapes[2][0], (4,4), stride=(4,4)).cuda()
+        self.downsampler_1_2 = nn.Conv2d(out_shapes[1][0], out_shapes[2][0], (2,2), stride=(2,2)).cuda()
+        unets = []
+        for i_o_shape, o_shape in enumerate(out_shapes):
+            num_downs = int(np.log2(o_shape[1]).round())
+            n_in_chans = o_shape[0]
+            n_out_chans = o_shape[0]
+            n_in_chans += (n_in_chans * i_o_shape)
+            this_unet = WrapResidualNonSigmoidUnet(
+                    UnetGeneratorCompact(
+                        n_in_chans,
+                        n_out_chans,
+                        num_downs=num_downs,
+                        final_nonlin=nn.Identity,
+                        norm_layer=AffineOnChans,
+                        nonlin_down=nn.ELU,
+                        nonlin_up=nn.ELU,
+                    ),
+                )
+            unets.append(this_unet)
+        self.unets = nn.ModuleList(unets)
+
+    def forward(self, x):
+        with th.no_grad():
+            x = img_0_1_to_glow_img(x)
+            z, _ = self.glow[0](x)
+            assert len(z) == len(self.flatten_modules)
+            two_d_z = [f.invert(a_z)[0] for f,a_z in zip(self.flatten_modules, z)]
+            
+        out_0 = self.unets[0](two_d_z[0])
+        out_1 = self.unets[1](th.cat((two_d_z[1], self.downsampler_0_1(two_d_z[0])), dim=1))
+        out_2 = self.unets[2](th.cat((two_d_z[2], self.downsampler_0_2(two_d_z[0]),
+                        self.downsampler_1_2(two_d_z[1])), dim=1))
+
+        processed_outs = [f(o)[0] for f, o in zip(self.flatten_modules, (out_0, out_1, out_2))]
+        x_inv, _ = self.glow[0].invert(processed_outs)
+        x_inv = glow_img_to_img_0_1(x_inv)
+        return x_inv
 
 
 class GlowPreproc(nn.Module):

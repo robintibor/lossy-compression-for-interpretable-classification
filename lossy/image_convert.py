@@ -4,6 +4,10 @@ from torch import nn
 from lossy.util import soft_clip, inverse_sigmoid
 
 
+def soft_clamp_to_0_1(x):
+    return x - (x - x.clamp(0,1)).detach()
+
+
 def quantize_data(x):
     x_0_255 = x * 255
     # pass-through grad
@@ -23,6 +27,10 @@ def add_glow_noise(x):
 def add_glow_noise_to_0_1(x):
     # later will be multiplied with 255/256.0
     return x + torch.rand_like(x) * 1/255.0
+
+
+def add_glow_noise_to_0_1_and_rescale(x):
+    return x * (255/256.0) + torch.rand_like(x) * 1/256.0
 
 
 def glow_img_to_img_0_1(image):
@@ -144,6 +152,18 @@ def contrast_normalize(img_0_1, eps=1e-6):
         img_clipped = soft_clip(img_0_1, eps, 1-eps)
         alphas = inverse_sigmoid(img_clipped)
         alphas_standardized = standardize_per_example(alphas)
+        img_normalized = torch.sigmoid(alphas_standardized)
+        return img_normalized
+
+
+def contrast_normalize_to_ref(img_0_1, img_0_1_ref, eps=1e-6):
+        img_clipped = soft_clip(img_0_1, eps, 1-eps)
+        alphas = inverse_sigmoid(img_clipped)
+        img_ref_clipped = soft_clip(img_0_1_ref, eps, 1-eps)
+        alphas_ref = inverse_sigmoid(img_ref_clipped)
+        alphas_standardized = standardize_per_example(alphas)
+        dims = tuple(range(1,len(alphas.shape)))
+        alphas_standardized = alphas_standardized * alphas_ref.std(dim=dims, keepdim=True)
         img_normalized = torch.sigmoid(alphas_standardized)
         return img_normalized
 

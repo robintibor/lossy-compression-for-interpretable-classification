@@ -67,12 +67,9 @@ def get_grid_param_list():
     df = load_data_frame(parent_exp_folder)
     df = df[df.debug == False]
     df = df[df.finished == True]
-    df = df[
-        (df.n_epochs == 100) &
-        (df.loss_name == 'grad_act_match') &
-        (df.per_module == 1) &
-        (df.dist_name == 'normed_sse') &
-        (df.use_expected_loss == False)]
+
+    df = df[(df.detach_bpd_factors == True) & (df.n_epochs == 100) ]
+
 
     #df = df[df.activation == "shifted_softplus_1"]
 

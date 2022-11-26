@@ -1,7 +1,9 @@
+import itertools
 import json
 import logging
 import os.path
 import sys
+
 
 import kornia
 import numpy as np
@@ -20,10 +22,14 @@ from lossy import data_locations
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment
 from lossy.datasets import get_dataset
+from lossy.glow import load_glow
+from lossy.glow_preproc import get_glow_preproc
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import add_glow_noise_to_0_1, quantize_data, ContrastNormalize, img_0_1_to_glow_img
 from lossy.image_convert import to_plus_minus_one
 from lossy.util import np_to_th, th_to_np
+
+
 
 from kornia.filters import GaussianBlur2d
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
@@ -33,21 +39,49 @@ log = logging.getLogger(__name__)
 def get_preprocessor_from_folder(saved_exp_folder):
     config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
     assert config.get("residual_preproc", True)
-    preproc = WrapResidualIdentityUnet(
-        nn.Sequential(
+    preproc_name = config["preproc_name"]
+    if preproc_name == 'res_unet':
+        preproc = WrapResidualIdentityUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGenerator(
+                    3,
+                    3,
+                    num_downs=5,
+                    final_nonlin=nn.Identity,
+                    norm_layer=AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                ),
+            ),
+            final_nonlin=nn.Sigmoid(),
+        ).cuda()
+    elif preproc_name == 'unet':
+        preproc = nn.Sequential(
             Expression(to_plus_minus_one),
             UnetGenerator(
                 3,
                 3,
                 num_downs=5,
-                final_nonlin=nn.Identity,
+                final_nonlin=nn.Sigmoid,
                 norm_layer=AffineOnChans,
                 nonlin_down=nn.ELU,
                 nonlin_up=nn.ELU,
             ),
-        ),
-        final_nonlin=nn.Sigmoid(),
-    ).cuda()
+            AffineOnChans(3),  # Does this even make sense after sigmoid?
+        ).cuda()
+    elif preproc_name == 'glow':
+        glow = load_glow(config['glow_model_path_32x32'])
+        preproc = get_glow_preproc(glow, resnet_encoder=False)
+    else:
+        glow = load_glow(config['glow_model_path_32x32'])
+        assert preproc_name == 'glow_with_resnet'
+        preproc = get_glow_preproc(glow, resnet_encoder=True)
+    if preproc_name in ['glow', 'glow_with_resnet']:
+        for m in itertools.chain(preproc.encoder.modules(), preproc.decoder.modules()):
+            if m.__class__.__name__ == 'AffineModifier':
+                m.eps = 5e-2
+
 
     preproc_post = nn.Sequential()
     if config['quantize_after_simplifier']:

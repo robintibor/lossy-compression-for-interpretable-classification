@@ -43,11 +43,12 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             "separate_orig_clf": [False],
-            "dist_name": ["normed_sse_detached_norm"],
+            "dist_name": ["normed_sse_detached_norm", "normed_sse"],
             "train_clf_on_dist_loss": [True],
             "train_clf_on_orig_simultaneously": [True],
             "orig_loss_weight": [10],
             "stop_clf_grad_through_simple": [False],
+            "simple_clf_loss_weight": [0.5,],
         })
 
     grid_params = product_of_list_of_lists_of_dicts(

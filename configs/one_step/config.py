@@ -68,7 +68,7 @@ def get_grid_param_list():
                 None
             ],  # ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
             #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
-            "mimic_cxr_target": [None],
+            "mimic_cxr_target": [None],#]'pleural_effusion'],
             "first_n": [None],
         }
     )
@@ -76,7 +76,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [10],
+            "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -87,10 +87,9 @@ def get_grid_param_list():
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
-            "dist_threshold": [0.1,0.2,0.3,0.4],
+            "dist_threshold": [0.5],#0.1,0.2,0.3,0.4],#0.05,
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
-            "simple_clf_loss_weight": [0,],
         }
     )
 
@@ -122,7 +121,7 @@ def get_grid_param_list():
     # # },
     # ]
 
-    noise_params =dictlistprod(
+    noise_params = dictlistprod(
         {
             "noise_augment_level": [1e-3],#0,
             "trivial_augment": [False],
@@ -180,18 +179,33 @@ def get_grid_param_list():
             "pooling": ["avgpooling"],
             "external_pretrained_clf": [False],
             "glow_model_path_32x32": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"], #/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th
+            "soft_clamp_0_1": [True],
         }
     )
 
     preproc_params = dictlistprod({
-
-        "lr_preproc": [1e-4,],
-            "preproc_name": ["glow", "glow_with_resnet"],#res_unet
-
+       #"lr_preproc": [1e-4,],
+        #"preproc_name": ["glow_with_resnet"],#res_unet
     }) + dictlistprod({
-        "lr_preproc": [5e-4,],
-            "preproc_name": ["res_unet",],#res_unet
-    })
+        #"lr_preproc": [3e-4,],
+        #    "preproc_name": ["unet",],#res_unet
+    })+ dictlistprod({
+        # "lr_preproc": [5e-4,],
+        # "preproc_name": ["res_unet",],#res_unet
+    })+ dictlistprod({
+       # "lr_preproc": [3e-4,],
+       # "preproc_name": ["on_top_of_glow",],#res_unet
+    })+ dictlistprod({
+        #"lr_preproc": [3e-4,],
+        #"preproc_name": ["res_blend_unet",],#res_unet
+    }) + dictlistprod({
+        "lr_preproc": [1e-4,],
+        "preproc_name": ["res_mix_unet",],#res_unet
+    }) + dictlistprod({
+        #"lr_preproc": [3e-4,],
+        #"preproc_name": ["res_mix_grey_unet",],#res_unet
+    }
+    )
 
     optim_params = dictlistprod(
         {
@@ -212,7 +226,8 @@ def get_grid_param_list():
                 #0.7,
                 #0.8,
                 #0.9,
-                0.5,
+                1,
+                #0.5,
             ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
@@ -299,6 +314,7 @@ def run(
     detach_bpd_factors,
     stop_clf_grad_through_simple,
     simple_clf_loss_weight,
+    soft_clamp_0_1,
 ):
     if debug:
         n_epochs = 3

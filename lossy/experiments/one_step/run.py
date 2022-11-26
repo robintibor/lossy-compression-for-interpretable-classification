@@ -41,9 +41,13 @@ from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.glow import load_glow
 from lossy.glow_preproc import get_glow_preproc
+from lossy.glow_preproc import OnTopOfGlowPreproc
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
+from lossy.image2image import WrapResidualAndBlendUnet, WrapResidualAndMixUnet
+from lossy.image2image import WrapResidualAndMixGreyUnet
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 from lossy.image_convert import img_0_1_to_glow_img, quantize_data
+from lossy.image_convert import soft_clamp_to_0_1
 from lossy.losses import grad_normed_loss
 from lossy.losses import kl_divergence
 from lossy.modules import Expression
@@ -320,6 +324,7 @@ def run_exp(
     detach_bpd_factors,
     stop_clf_grad_through_simple,
     simple_clf_loss_weight,
+    soft_clamp_0_1,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
                           "ConvNet", "linear", "torchvision_resnet18"]
@@ -414,7 +419,7 @@ def run_exp(
                 ),
             )
 
-        if dataset in ["cifar10", "cifar100", "imagenet"]:
+        if dataset in ["cifar10", "cifar100", "imagenet", "imagenet32"]:
             aug_m.add_module(
                 "hflip",
                 FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
@@ -484,7 +489,20 @@ def run_exp(
     def to_plus_minus_one(x):
         return (x * 2) - 1
 
-    if preproc_name == 'res_unet':
+    if preproc_name == 'unet':
+        preproc = nn.Sequential(
+            Expression(to_plus_minus_one),
+            UnetGenerator(
+                3,
+                3,
+                num_downs=5,
+                final_nonlin=nn.Sigmoid,
+                norm_layer=AffineOnChans,
+                nonlin_down=nn.ELU,
+                nonlin_up=nn.ELU,
+            ),
+        ).cuda()
+    elif preproc_name == 'res_unet':
         preproc = WrapResidualIdentityUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -500,22 +518,57 @@ def run_exp(
             ),
             final_nonlin=nn.Sigmoid(),
         ).cuda()
-    elif preproc_name == 'unet':
-        preproc = nn.Sequential(
-            Expression(to_plus_minus_one),
-            UnetGenerator(
-                3,
-                3,
-                num_downs=5,
-                final_nonlin=nn.Sigmoid,
-                norm_layer=AffineOnChans,
-                nonlin_down=nn.ELU,
-                nonlin_up=nn.ELU,
+    elif preproc_name == 'res_blend_unet':
+        preproc = WrapResidualAndBlendUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGenerator(
+                    3,
+                    6,
+                    num_downs=5,
+                    final_nonlin=nn.Identity,
+                    norm_layer=AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                ),
             ),
-            AffineOnChans(3),  # Does this even make sense after sigmoid?
+        ).cuda()
+    elif preproc_name == 'res_mix_unet':
+        preproc = WrapResidualAndMixUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGenerator(
+                    3,
+                    6,
+                    num_downs=5,
+                    final_nonlin=nn.Identity,
+                    norm_layer=AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                ),
+            ),
+        ).cuda()
+    elif preproc_name == 'res_mix_grey_unet':
+        preproc = WrapResidualAndMixGreyUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGenerator(
+                    3,
+                    7,
+                    num_downs=5,
+                    ngf=64,#64
+                    final_nonlin=nn.Identity,
+                    norm_layer=AffineOnChans,#SimpleLayerNorm,#nn.BatchNorm2d,#AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                ),
+            ),
         ).cuda()
     elif preproc_name == 'glow':
         preproc = get_glow_preproc(glow, resnet_encoder=False)
+    elif preproc_name == 'on_top_of_glow':
+        out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
+        preproc = OnTopOfGlowPreproc(glow, out_shapes).cuda()
     else:
         assert preproc_name == 'glow_with_resnet'
         preproc = get_glow_preproc(glow, resnet_encoder=True)
@@ -531,6 +584,8 @@ def run_exp(
     if noise_after_simplifier:
         preproc_post.add_module(
             "add_glow_noise", Expression(add_glow_noise_to_0_1))
+    if soft_clamp_0_1:
+        preproc_post.add_module("soft_clamp_to_0_1", Expression(soft_clamp_to_0_1))
     preproc = nn.Sequential(
         preproc, preproc_post)
 
@@ -604,6 +659,7 @@ def run_exp(
         for X, y in tqdm(trainloader):
             batch_results = dict()
             clf.train()
+            preproc.train()
             X = X.cuda()
             X = X.requires_grad_(True)
             y = y.cuda()
@@ -902,6 +958,7 @@ def run_exp(
                 opt_clf.zero_grad(set_to_none=True)
             nb_res.collect(**batch_results)
         clf.eval()
+        preproc.eval()
         log.info(f"Epoch {i_epoch:d}")
         results = {}
         if train_simclr_orig:

@@ -52,6 +52,145 @@ class WrapResidualIdentityUnet(nn.Module):
         return out
 
 
+class WrapResidualAndBlendUnet(nn.Module):
+    def __init__(
+        self,
+        unet,
+    ):
+        super().__init__()
+        self.unet = unet
+
+    def forward(self, x):
+        unet_out = self.unet(x)
+        unet_out, factors = th.chunk(unet_out, 2, dim=1)
+        factors = th.sigmoid(factors)
+        unet_x = th.sigmoid(unet_out)
+        x_inv = unet_x * factors + (1-factors) * x
+        return x_inv
+
+
+class WrapResidualAndMixUnet(nn.Module):
+    def __init__(
+        self,
+        unet,
+    ):
+        super().__init__()
+        self.unet = unet
+
+    def forward(self, x):
+        with th.no_grad():
+            clamped_x = th.clamp(x, 1e-3, 1 - 1e-3)
+            # invert sigmoid
+            x_inv = th.log(clamped_x) - th.log(1.0 - clamped_x)
+        unet_out = self.unet(x)
+        unet_out, factors_x = th.chunk(unet_out, 2, dim=1)
+        out_before_sigmoid = x_inv * factors_x + unet_out# * factors_unet_x
+        out = th.sigmoid(out_before_sigmoid)
+        return out
+
+
+class WrapResidualAndMixGreyUnet(nn.Module):
+    def __init__(
+        self,
+        unet,
+    ):
+        super().__init__()
+        self.unet = unet
+
+    def forward(self, x):
+        with th.no_grad():
+            clamped_x = th.clamp(x, 1e-3, 1 - 1e-3)
+            # invert sigmoid
+            x_inv = th.log(clamped_x) - th.log(1.0 - clamped_x)
+        unet_out = self.unet(x)
+        factors_grey_x = unet_out[:,-1:]
+        unet_out, factors_x, = th.chunk(unet_out[:,:-1], 2, dim=1)
+        grey_x_inv = th.mean(x_inv, dim=1, keepdim=True)
+        out_before_sigmoid = x_inv * factors_x + grey_x_inv * factors_grey_x + unet_out
+        out = th.sigmoid(out_before_sigmoid)
+        return out
+
+
+class WrapResidualNonSigmoidUnet(nn.Module):
+    def __init__(
+        self,
+        unet,
+    ):
+        super().__init__()
+        self.unet = unet
+        self.merge_weight = nn.Parameter(th.zeros(1))
+
+    def forward(self, x):
+        unet_out = self.unet(x)
+        # restrict to desired number of channels
+        merged = x[:,:unet_out.shape[1]] + unet_out * self.merge_weight
+        return merged
+
+    
+class UnetGeneratorCompact(nn.Module):
+    """Create a Unet-based generator for less number of downs than 5"""
+
+    def __init__(
+        self,
+        input_nc,
+        output_nc,
+        num_downs,
+        ngf=64,
+        norm_layer=nn.BatchNorm2d,
+        use_dropout=False,
+        final_nonlin=nn.Tanh,
+        nonlin_up=nn.ReLU,
+        nonlin_down=partial(nn.LeakyReLU, negative_slope=0.2),
+    ):
+        """Construct a Unet generator
+        Parameters:
+            input_nc (int)  -- the number of channels in input images
+            output_nc (int) -- the number of channels in output images
+            num_downs (int) -- the number of downsamplings in UNet. For example, # if |num_downs| == 7,
+                                image of size 128x128 will become of size 1x1 # at the bottleneck
+            ngf (int)       -- the number of filters in the last conv layer
+            norm_layer      -- normalization layer
+        We construct the U-Net from the innermost layer to the outermost layer.
+        It is a recursive process.
+        """
+        super().__init__()
+        # construct unet structure
+        unet_block = UnetSkipConnectionBlock(
+            ngf * 8,
+            ngf * 8,
+            input_nc=None,
+            submodule=None,
+            norm_layer=norm_layer,
+            innermost=True,
+        )  # add the innermost layer
+        for i in range(num_downs - 2):  # add intermediate layers with ngf * 8 filters
+            unet_block = UnetSkipConnectionBlock(
+                ngf * 8,
+                ngf * 8,
+                input_nc=None,
+                submodule=unet_block,
+                norm_layer=norm_layer,
+                use_dropout=use_dropout,
+                nonlin_up=nonlin_up,
+                nonlin_down=nonlin_down,
+            )
+        self.model = UnetSkipConnectionBlock(
+            output_nc,
+            ngf * 8,
+            input_nc=input_nc,
+            submodule=unet_block,
+            outermost=True,
+            norm_layer=norm_layer,
+            final_nonlin=final_nonlin,
+            nonlin_up=nonlin_up,
+            nonlin_down=nonlin_down,
+        )  # add the outermost layer
+
+    def forward(self, input):
+        """Standard forward"""
+        return self.model(input)
+    
+    
 class UnetGenerator(nn.Module):
     """Create a Unet-based generator"""
 
@@ -78,7 +217,7 @@ class UnetGenerator(nn.Module):
         We construct the U-Net from the innermost layer to the outermost layer.
         It is a recursive process.
         """
-        super(UnetGenerator, self).__init__()
+        super().__init__()
         # construct unet structure
         unet_block = UnetSkipConnectionBlock(
             ngf * 8,
