@@ -325,6 +325,7 @@ def run_exp(
     stop_clf_grad_through_simple,
     simple_clf_loss_weight,
     soft_clamp_0_1,
+    unet_use_bias,
 ):
     assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
                           "ConvNet", "linear", "torchvision_resnet18"]
@@ -500,6 +501,7 @@ def run_exp(
                 norm_layer=AffineOnChans,
                 nonlin_down=nn.ELU,
                 nonlin_up=nn.ELU,
+                use_bias=unet_use_bias,
             ),
         ).cuda()
     elif preproc_name == 'res_unet':
@@ -514,6 +516,7 @@ def run_exp(
                     norm_layer=AffineOnChans,
                     nonlin_down=nn.ELU,
                     nonlin_up=nn.ELU,
+                    use_bias=unet_use_bias,
                 ),
             ),
             final_nonlin=nn.Sigmoid(),
@@ -530,6 +533,7 @@ def run_exp(
                     norm_layer=AffineOnChans,
                     nonlin_down=nn.ELU,
                     nonlin_up=nn.ELU,
+                    use_bias=unet_use_bias,
                 ),
             ),
         ).cuda()
@@ -545,6 +549,7 @@ def run_exp(
                     norm_layer=AffineOnChans,
                     nonlin_down=nn.ELU,
                     nonlin_up=nn.ELU,
+                    use_bias=unet_use_bias,
                 ),
             ),
         ).cuda()
@@ -561,6 +566,7 @@ def run_exp(
                     norm_layer=AffineOnChans,#SimpleLayerNorm,#nn.BatchNorm2d,#AffineOnChans,
                     nonlin_down=nn.ELU,
                     nonlin_up=nn.ELU,
+                    use_bias=unet_use_bias,
                 ),
             ),
         ).cuda()

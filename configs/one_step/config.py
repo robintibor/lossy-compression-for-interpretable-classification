@@ -87,7 +87,7 @@ def get_grid_param_list():
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
-            "dist_threshold": [0.5],#0.1,0.2,0.3,0.4],#0.05,
+            "dist_threshold": [0.1,0.2,0.3,0.4],#],#0.05,
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
         }
@@ -180,6 +180,7 @@ def get_grid_param_list():
             "external_pretrained_clf": [False],
             "glow_model_path_32x32": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"], #/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th
             "soft_clamp_0_1": [True],
+            "unet_use_bias": [True],
         }
     )
 
@@ -199,7 +200,7 @@ def get_grid_param_list():
         #"lr_preproc": [3e-4,],
         #"preproc_name": ["res_blend_unet",],#res_unet
     }) + dictlistprod({
-        "lr_preproc": [1e-4,],
+        "lr_preproc": [3e-4,],
         "preproc_name": ["res_mix_unet",],#res_unet
     }) + dictlistprod({
         #"lr_preproc": [3e-4,],
@@ -315,6 +316,7 @@ def run(
     stop_clf_grad_through_simple,
     simple_clf_loss_weight,
     soft_clamp_0_1,
+    unet_use_bias,
 ):
     if debug:
         n_epochs = 3

@@ -141,6 +141,7 @@ class UnetGeneratorCompact(nn.Module):
         final_nonlin=nn.Tanh,
         nonlin_up=nn.ReLU,
         nonlin_down=partial(nn.LeakyReLU, negative_slope=0.2),
+        use_bias=True,
     ):
         """Construct a Unet generator
         Parameters:
@@ -162,6 +163,7 @@ class UnetGeneratorCompact(nn.Module):
             submodule=None,
             norm_layer=norm_layer,
             innermost=True,
+            use_bias=use_bias,
         )  # add the innermost layer
         for i in range(num_downs - 2):  # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(
@@ -173,6 +175,7 @@ class UnetGeneratorCompact(nn.Module):
                 use_dropout=use_dropout,
                 nonlin_up=nonlin_up,
                 nonlin_down=nonlin_down,
+                use_bias=use_bias,
             )
         self.model = UnetSkipConnectionBlock(
             output_nc,
@@ -184,6 +187,7 @@ class UnetGeneratorCompact(nn.Module):
             final_nonlin=final_nonlin,
             nonlin_up=nonlin_up,
             nonlin_down=nonlin_down,
+            use_bias=use_bias,
         )  # add the outermost layer
 
     def forward(self, input):
@@ -205,6 +209,7 @@ class UnetGenerator(nn.Module):
         final_nonlin=nn.Tanh,
         nonlin_up=nn.ReLU,
         nonlin_down=partial(nn.LeakyReLU, negative_slope=0.2),
+        use_bias=True,
     ):
         """Construct a Unet generator
         Parameters:
@@ -226,6 +231,7 @@ class UnetGenerator(nn.Module):
             submodule=None,
             norm_layer=norm_layer,
             innermost=True,
+            use_bias=use_bias,
         )  # add the innermost layer
         for i in range(num_downs - 5):  # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(
@@ -237,6 +243,7 @@ class UnetGenerator(nn.Module):
                 use_dropout=use_dropout,
                 nonlin_up=nonlin_up,
                 nonlin_down=nonlin_down,
+                use_bias=use_bias,
             )
         # gradually reduce the number of filters from ngf * 8 to ngf
         unet_block = UnetSkipConnectionBlock(
@@ -247,6 +254,7 @@ class UnetGenerator(nn.Module):
             norm_layer=norm_layer,
             nonlin_up=nonlin_up,
             nonlin_down=nonlin_down,
+            use_bias=use_bias,
         )
         unet_block = UnetSkipConnectionBlock(
             ngf * 2,
@@ -256,6 +264,7 @@ class UnetGenerator(nn.Module):
             norm_layer=norm_layer,
             nonlin_up=nonlin_up,
             nonlin_down=nonlin_down,
+            use_bias=use_bias,
         )
         unet_block = UnetSkipConnectionBlock(
             ngf,
@@ -265,6 +274,7 @@ class UnetGenerator(nn.Module):
             norm_layer=norm_layer,
             nonlin_up=nonlin_up,
             nonlin_down=nonlin_down,
+            use_bias=use_bias,
         )
         self.model = UnetSkipConnectionBlock(
             output_nc,
@@ -276,6 +286,7 @@ class UnetGenerator(nn.Module):
             final_nonlin=final_nonlin,
             nonlin_up=nonlin_up,
             nonlin_down=nonlin_down,
+            use_bias=use_bias,
         )  # add the outermost layer
 
     def forward(self, input):
@@ -302,6 +313,7 @@ class UnetSkipConnectionBlock(nn.Module):
         final_nonlin=nn.Tanh,
         nonlin_up=nn.ReLU,
         nonlin_down=partial(nn.LeakyReLU, negative_slope=0.2),
+        use_bias=True,
     ):
         """Construct a Unet submodule with skip connections.
         Parameters:
@@ -316,10 +328,6 @@ class UnetSkipConnectionBlock(nn.Module):
         """
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
-        if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm2d
-        else:
-            use_bias = norm_layer == nn.InstanceNorm2d
         if input_nc is None:
             input_nc = outer_nc
         downconv = nn.Conv2d(
@@ -381,6 +389,7 @@ class UnetGenerator8x8(nn.Module):
         norm_layer=nn.BatchNorm2d,
         use_dropout=False,
         final_nonlin=nn.Tanh,
+        use_bias=True
     ):
         """Construct a Unet generator
         Parameters:
@@ -402,10 +411,12 @@ class UnetGenerator8x8(nn.Module):
             submodule=None,
             norm_layer=norm_layer,
             innermost=True,
+            use_bias=use_bias,
         )  # add the innermost layer
         # gradually reduce the number of filters from ngf * 8 to ngf
         unet_block = UnetSkipConnectionBlock(
-            ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer
+            ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer,
+            use_bias=use_bias,
         )
         self.model = UnetSkipConnectionBlock(
             output_nc,
@@ -415,6 +426,7 @@ class UnetGenerator8x8(nn.Module):
             outermost=True,
             norm_layer=norm_layer,
             final_nonlin=final_nonlin,
+            use_bias=use_bias,
         )  # add the outermost layer
 
     def forward(self, input):
