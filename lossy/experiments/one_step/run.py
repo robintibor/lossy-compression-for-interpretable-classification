@@ -31,6 +31,7 @@ from lossy.activation_match import gradparam_param
 from lossy.activation_match import normed_l1
 from lossy.activation_match import normed_sse
 from lossy.activation_match import normed_sse_detached_norm
+from lossy.activation_match import normed_sse_larger_detached_norm
 from lossy.activation_match import normed_sqrt_sse
 from lossy.activation_match import refed
 from lossy.activation_match import sse_loss
@@ -41,10 +42,15 @@ from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.glow import load_glow
 from lossy.glow_preproc import get_glow_preproc
+from lossy.glow_preproc import FixedLatentPreproc
 from lossy.glow_preproc import OnTopOfGlowPreproc
+from lossy.glow_preproc import OnTopOfGlowMixPreproc
+from lossy.glow_preproc import UnflattenGlow
+from lossy.image2image import UnetGeneratorWithExtraInput
 from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image2image import WrapResidualAndBlendUnet, WrapResidualAndMixUnet
 from lossy.image2image import WrapResidualAndMixGreyUnet
+from lossy.image2image import WrapResidualAndMixNonSigmoidUnet
 from lossy.image_convert import add_glow_noise, add_glow_noise_to_0_1
 from lossy.image_convert import img_0_1_to_glow_img, quantize_data
 from lossy.image_convert import soft_clamp_to_0_1
@@ -97,7 +103,11 @@ def get_clf_and_optim(
     im_size,
     external_pretrained_clf,
 ):
-    if model_name in ["wide_nf_net", "wide_bnorm_net", "ConvNet",]:
+    if model_name in [
+        "wide_nf_net",
+        "wide_bnorm_net",
+        "ConvNet",
+    ]:
         dropout = 0.3
         if saved_model_folder is not None:
             saved_model_config = json.load(
@@ -112,7 +122,7 @@ def get_clf_and_optim(
             else:
                 widen_factor = saved_model_config["width"]
 
-            dropout = saved_model_config["dropout"]
+            dropout = saved_model_config.get("dropout", 0.3)
             activation = saved_model_config.get(
                 "activation", "relu"
             )  # default was relu
@@ -151,23 +161,13 @@ def get_clf_and_optim(
             ).cuda()
         else:
             assert False
-        if saved_model_folder is not None:
-            try:
-                # used to have nf_net in name later removed that
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
-                )
-            except FileNotFoundError:
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "state_dict.th")
-                )
-
-            model.load_state_dict(saved_clf_state_dict)
     elif model_name == "resnet18":
         from lossy.resnet import resnet18
+
         model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
     elif model_name == "torchvision_resnet18":
         from torchvision.models import resnet18
+
         model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
     # What is this? probably old and deletable?
     elif model_name == "conv_net":
@@ -191,6 +191,32 @@ def get_clf_and_optim(
 
     clf = nn.Sequential(normalize, model)
     clf = clf.cuda()
+
+    if saved_model_folder is not None:
+        assert model_name in [
+            "wide_nf_net",
+            "wide_bnorm_net",
+            "ConvNet",
+        ]
+        if "lr_preproc" in saved_model_config:
+            try:
+                # used to have nf_net in name later removed that
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
+                )
+            except FileNotFoundError:
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "clf_state_dict.th")
+                )
+            # normalization included in model in SimpleBits training
+            clf.load_state_dict(saved_clf_state_dict)
+        else:
+            saved_clf_state_dict = th.load(
+                os.path.join(saved_model_folder, "state_dict.th")
+            )
+            # normalization was not included in model in regular training
+            clf[1].load_state_dict(saved_clf_state_dict)
+
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []
@@ -326,11 +352,28 @@ def run_exp(
     simple_clf_loss_weight,
     soft_clamp_0_1,
     unet_use_bias,
+    frozen_clf,
+    first_batch_only,
+    cat_clf_chans_for_preproc,
+    merge_weight_clf_chans,
+    weight_decay_preproc,
+    n_pretrain_preproc_epochs,
 ):
-    assert model_name in ["wide_nf_net", "nf_net", "wide_bnorm_net", "resnet18",
-                          "ConvNet", "linear", "torchvision_resnet18"]
+    assert model_name in [
+        "wide_nf_net",
+        "nf_net",
+        "wide_bnorm_net",
+        "resnet18",
+        "ConvNet",
+        "linear",
+        "torchvision_resnet18",
+    ]
     if saved_model_folder is not None:
         assert model_name in ["wide_nf_net", "ConvNet"]
+    if frozen_clf:
+        assert separate_orig_clf == False
+        assert train_clf_on_dist_loss == False
+        assert train_clf_on_orig_simultaneously == False
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
     writer.add_hparams(hparams, metric_dict={}, name=output_dir)
@@ -344,6 +387,11 @@ def run_exp(
     n_warmup_epochs = 0
     bias_for_conv = True
     data_parallel = th.cuda.device_count() > 1
+    eval_batch_size = 256
+
+    if first_batch_only:
+        first_n = batch_size
+        eval_batch_size = batch_size
 
     log.info("Load data...")
 
@@ -364,8 +412,16 @@ def run_exp(
         split_test_off_train=split_test_off_train,
         first_n=first_n,
         mimic_cxr_target=mimic_cxr_target,
-        stripes_factor=0.3
+        stripes_factor=0.3,
+        eval_batch_size=eval_batch_size,
     )
+
+    if first_batch_only:
+        X, y = next(testloader.__iter__())
+        X = X.cuda()
+        y = y.cuda()
+        # first test batch is your batch you mostly used for debugging
+        trainloader = testloader = train_det_loader = [(X, y)]
 
     log.info("Create classifier...")
     mean = wide_nf_net.mean[dataset]
@@ -408,7 +464,7 @@ def run_exp(
                     same_across_batch=False,
                 ),
             )
-        elif dataset != 'imagenet':  # imagenet random crop done already
+        elif dataset != "imagenet":  # imagenet random crop done already
             aug_m.add_module(
                 "crop",
                 FixedAugment(
@@ -465,7 +521,9 @@ def run_exp(
     if im_size == (32, 32):
         glow = load_glow(glow_model_path_32x32)
     elif im_size == (224, 224):
-        large_gen = th.load('/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/large-res-glow/8/gen_2.th')
+        large_gen = th.load(
+            "/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/large-res-glow/8/gen_2.th"
+        )
         glow = large_gen[1]
     else:
         raise ValueError(f"Unknown image size {im_size}")
@@ -490,7 +548,7 @@ def run_exp(
     def to_plus_minus_one(x):
         return (x * 2) - 1
 
-    if preproc_name == 'unet':
+    if preproc_name == "unet":
         preproc = nn.Sequential(
             Expression(to_plus_minus_one),
             UnetGenerator(
@@ -504,7 +562,7 @@ def run_exp(
                 use_bias=unet_use_bias,
             ),
         ).cuda()
-    elif preproc_name == 'res_unet':
+    elif preproc_name == "res_unet":
         preproc = WrapResidualIdentityUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -521,7 +579,7 @@ def run_exp(
             ),
             final_nonlin=nn.Sigmoid(),
         ).cuda()
-    elif preproc_name == 'res_blend_unet':
+    elif preproc_name == "res_blend_unet":
         preproc = WrapResidualAndBlendUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -537,7 +595,7 @@ def run_exp(
                 ),
             ),
         ).cuda()
-    elif preproc_name == 'res_mix_unet':
+    elif preproc_name == "res_mix_unet":
         preproc = WrapResidualAndMixUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -553,7 +611,7 @@ def run_exp(
                 ),
             ),
         ).cuda()
-    elif preproc_name == 'res_mix_grey_unet':
+    elif preproc_name == "res_mix_grey_unet":
         preproc = WrapResidualAndMixGreyUnet(
             nn.Sequential(
                 Expression(to_plus_minus_one),
@@ -561,46 +619,102 @@ def run_exp(
                     3,
                     7,
                     num_downs=5,
-                    ngf=64,#64
+                    ngf=64,  # 64
                     final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,#SimpleLayerNorm,#nn.BatchNorm2d,#AffineOnChans,
+                    norm_layer=AffineOnChans,  # SimpleLayerNorm,#nn.BatchNorm2d,#AffineOnChans,
                     nonlin_down=nn.ELU,
                     nonlin_up=nn.ELU,
                     use_bias=unet_use_bias,
                 ),
             ),
         ).cuda()
-    elif preproc_name == 'glow':
-        preproc = get_glow_preproc(glow, resnet_encoder=False)
-    elif preproc_name == 'on_top_of_glow':
+    elif preproc_name == "res_mix_glow_unet":
+        glow_out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
+        unflat_glow = UnflattenGlow(glow, glow_out_shapes)
+        preproc = WrapResidualAndMixUnet(
+            nn.Sequential(
+                Expression(to_plus_minus_one),
+                UnetGeneratorWithExtraInput(
+                    3,
+                    6,
+                    num_downs=5,
+                    final_nonlin=partial(AffineOnChans, 6),  # nn.Identity,
+                    norm_layer=AffineOnChans,
+                    nonlin_down=nn.ELU,
+                    nonlin_up=nn.ELU,
+                    use_bias=unet_use_bias,
+                ),
+            ),
+        ).cuda()
+        preproc.unet[1].model.model[4].factors.data[:] = 0.2
+    elif preproc_name == "glow":
+        preproc = get_glow_preproc(
+            glow,
+            encoder_name="glow",
+            cat_clf_chans=cat_clf_chans_for_preproc,
+            merge_weight_clf_chans=None,
+        )
+    elif preproc_name == "on_top_of_glow":
         out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
         preproc = OnTopOfGlowPreproc(glow, out_shapes).cuda()
+    elif preproc_name == "on_top_of_glow_mix":
+        out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
+        preproc = OnTopOfGlowMixPreproc(glow, out_shapes).cuda()
+    elif preproc_name == "latent_z":
+        # first test batch is batch you mostly used for debugging
+        X, y = next(testloader.__iter__())
+        preproc = FixedLatentPreproc(glow, X)
+    elif preproc_name == "glow_with_pure_resnet":
+        preproc = get_glow_preproc(
+            glow,
+            encoder_name="resnet",
+            cat_clf_chans=cat_clf_chans_for_preproc,
+            merge_weight_clf_chans=merge_weight_clf_chans,
+        )
     else:
-        assert preproc_name == 'glow_with_resnet'
-        preproc = get_glow_preproc(glow, resnet_encoder=True)
-    if preproc_name in ['glow', 'glow_with_resnet']:
-        for m in itertools.chain(glow.modules(), preproc.encoder.modules(), preproc.decoder.modules()):
-            if m.__class__.__name__ == 'AffineModifier':
+        assert preproc_name == "glow_with_resnet"
+        preproc = get_glow_preproc(
+            glow,
+            encoder_name="glow_resnet",
+            cat_clf_chans=cat_clf_chans_for_preproc,
+            merge_weight_clf_chans=merge_weight_clf_chans,
+        )
+
+    if preproc_name in [
+        "glow",
+        "glow_with_resnet",
+        "glow_with_pure_resnet",
+        "on_top_of_glow",
+        "on_top_of_glow_mix",
+    ]:
+        glow_module_gens = [glow.modules()]
+        if preproc_name in [
+            "glow",
+            "glow_with_resnet",
+            "glow_with_pure_resnet",
+        ]:
+            glow_module_gens.extend(
+                [preproc.encoder.modules(), preproc.decoder.modules()]
+            )
+        for m in itertools.chain(*glow_module_gens):
+            if m.__class__.__name__ == "AffineModifier":
                 m.eps = 5e-2
 
     preproc_post = nn.Sequential()
     if quantize_after_simplifier:
-        preproc_post.add_module(
-            "quantize", Expression(quantize_data))
+        preproc_post.add_module("quantize", Expression(quantize_data))
     if noise_after_simplifier:
-        preproc_post.add_module(
-            "add_glow_noise", Expression(add_glow_noise_to_0_1))
+        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
     if soft_clamp_0_1:
         preproc_post.add_module("soft_clamp_to_0_1", Expression(soft_clamp_to_0_1))
-    preproc = nn.Sequential(
-        preproc, preproc_post)
+    preproc = nn.Sequential(preproc, preproc_post)
 
     beta_preproc = (0.5, 0.99)
 
     opt_preproc = torch.optim.Adam(
         [p for p in preproc.parameters() if p.requires_grad],
         lr=lr_preproc,
-        weight_decay=5e-5,
+        weight_decay=weight_decay_preproc,
         betas=beta_preproc,
     )
     if data_parallel:
@@ -635,6 +749,7 @@ def run_exp(
             "cosine_distance": partial(cosine_distance, eps=1e-15),
             "normed_sse": partial(normed_sse, eps=1e-15),
             "normed_sse_detached_norm": partial(normed_sse_detached_norm, eps=1e-15),
+            "normed_sse_larger_detached_norm": partial(normed_sse_larger_detached_norm, eps=1e-15),
             "sse": sse_loss,
             "normed_sqrt_sse": partial(normed_sqrt_sse, eps=1e-15),
             "normed_l1": partial(normed_l1, eps=1e-15),
@@ -660,11 +775,47 @@ def run_exp(
             if len(list(m.parameters(recurse=False))) > 0
         ]
 
+    for i_epoch in trange(n_pretrain_preproc_epochs):
+        for X, y in tqdm(trainloader):
+            X = X.cuda()
+            if cat_clf_chans_for_preproc:
+                with th.no_grad():
+                    orig_acts_grads = get_in_out_activations_per_module(
+                        clf,
+                        X,
+                        wanted_modules=wanted_modules,
+                    )
+
+                i_wanted_feature_maps = [6, 11, 15]
+                wanted_feature_maps = [
+                    list(orig_acts_grads.values())[i]["out_act"][0]
+                    for i in i_wanted_feature_maps
+                ]
+                preproc[0].encoder.block32x32.chans_to_cat = wanted_feature_maps[
+                    0
+                ].detach()
+                preproc[0].encoder.block16x16.chans_to_cat = wanted_feature_maps[
+                    1
+                ].detach()
+                preproc[0].encoder.block8x8.chans_to_cat = wanted_feature_maps[
+                    2
+                ].detach()
+            simple_X = preproc(X)
+
+            mse = th.mean(th.square(X - simple_X)) * 10
+
+            opt_preproc.zero_grad()
+            mse.backward()
+            opt_preproc.step()
+            opt_preproc.zero_grad()
+
     nb_res = Results(0.98)
     for i_epoch in trange(n_epochs + n_warmup_epochs):
         for X, y in tqdm(trainloader):
             batch_results = dict()
             clf.train()
+            if frozen_clf:
+                clf.eval()
             preproc.train()
             X = X.cuda()
             X = X.requires_grad_(True)
@@ -687,10 +838,18 @@ def run_exp(
                 orig_clf_loss.backward()
                 opt_orig_clf.step()
                 opt_orig_clf.zero_grad(set_to_none=True)
-                batch_results['orig_clf_loss'] = orig_clf_loss.item()
+                batch_results["orig_clf_loss"] = orig_clf_loss.item()
 
-            simple_X = preproc(X)
-            simple_X_aug = aug_m(simple_X)
+            if preproc_name == "res_mix_glow_unet":
+                with th.no_grad():
+                    glow_2d_out = unflat_glow(X)
+                    preproc[0].unet[1].block16x16.chans_to_cat = glow_2d_out[0]
+                    preproc[0].unet[1].block8x8.chans_to_cat = glow_2d_out[1]
+                    preproc[0].unet[1].block4x4.chans_to_cat = glow_2d_out[2]
+
+            if not cat_clf_chans_for_preproc:
+                simple_X = preproc(X)
+                simple_X_aug = aug_m(simple_X)
 
             if loss_name in [
                 "grad_act_match",
@@ -700,35 +859,61 @@ def run_exp(
                 loss_fn = lambda o: th.nn.functional.cross_entropy(
                     o, y, reduction="none"
                 )
-                if clf_loss_name == 'normed_loss':
+                if clf_loss_name == "normed_loss":
                     loss_fn = grad_normed_loss(loss_fn)
-                elif clf_loss_name == 'expected_loss':
+                elif clf_loss_name == "expected_loss":
                     unscaled_loss_fn = lambda o, y: th.nn.functional.cross_entropy(
                         o, y, reduction="none"
                     )
-                    expected_scaled_loss_fn = expected_scaled_loss_mult(unscaled_loss_fn)
+                    expected_scaled_loss_fn = expected_scaled_loss_mult(
+                        unscaled_loss_fn
+                    )
                     loss_fn = partial(expected_scaled_loss_fn, y=y)
-                elif clf_loss_name == 'expected_grad_loss':
+                elif clf_loss_name == "expected_grad_loss":
                     loss_fn = partial(expected_grad_loss, y=y)
                 else:
-                    assert clf_loss_name == 'normal_crossent'
+                    assert clf_loss_name == "normal_crossent"
                     unmeaned_loss_fn = loss_fn
                     loss_fn = lambda o: th.mean(unmeaned_loss_fn(o))
 
                 random_states = get_random_states()
                 orig_acts_grads = get_in_out_acts_and_in_out_grads_per_module(
-                    clf_for_comparisons, X_aug, loss_fn, wanted_modules=wanted_modules,
-                    retain_graph=(train_clf_on_dist_loss or train_clf_on_orig_simultaneously)
+                    clf_for_comparisons,
+                    X_aug,
+                    loss_fn,
+                    wanted_modules=wanted_modules,
+                    retain_graph=(
+                        train_clf_on_dist_loss or train_clf_on_orig_simultaneously
+                    ),
                 )
                 if not (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
                     orig_acts_grads = detach_acts_grads(orig_acts_grads)
-
                 set_grads_to_none(clf_for_comparisons.parameters())
+
+                if cat_clf_chans_for_preproc:
+                    i_wanted_feature_maps = [6, 11, 15]
+                    wanted_feature_maps = [
+                        list(orig_acts_grads.values())[i]["out_act"][0]
+                        for i in i_wanted_feature_maps
+                    ]
+                    preproc[0].encoder.block32x32.chans_to_cat = wanted_feature_maps[
+                        0
+                    ].detach()
+                    preproc[0].encoder.block16x16.chans_to_cat = wanted_feature_maps[
+                        1
+                    ].detach()
+                    preproc[0].encoder.block8x8.chans_to_cat = wanted_feature_maps[
+                        2
+                    ].detach()
+
+                simple_X = preproc(X)
+                simple_X_aug = aug_m(simple_X)
 
                 set_random_states(random_states)
                 if train_clf_on_dist_loss and stop_clf_grad_through_simple:
                     simple_clf_for_comparisons, simple_wanted_modules = deepcopy(
-                        (clf_for_comparisons, wanted_modules))
+                        (clf_for_comparisons, wanted_modules)
+                    )
                 else:
                     simple_clf_for_comparisons = clf_for_comparisons
                     simple_wanted_modules = wanted_modules
@@ -738,11 +923,15 @@ def run_exp(
                         simple_X_aug,
                         wanted_modules=simple_wanted_modules,
                     )
-                    if (not separate_orig_clf) and (loss_name == 'normal_crossent') and (
-                    not train_clf_on_orig_simultaneously):
+                    if (
+                        (not separate_orig_clf)
+                        and (loss_name == "normal_crossent")
+                        and (not train_clf_on_orig_simultaneously)
+                    ):
                         assert False, (
-                                "recheck this case, whether all exceptions are taken into account" +
-                                "and also then else case whether it makes sense")
+                            "recheck this case, whether all exceptions are taken into account"
+                            + "and also then else case whether it makes sense"
+                        )
                         # Compute and store gradients for classifier update
                         # loss = loss_fn(simple_acts_grads[wanted_modules[-1]]["out_act"][0])
                         loss = loss_fn(
@@ -768,9 +957,11 @@ def run_exp(
                         new_simple_acts_grads[orig_m] = simple_acts_grads[m]
                     simple_acts_grads = new_simple_acts_grads
 
-                if ((not separate_orig_clf) and
-                        (loss_name == 'normal_crossent') and
-                        (not train_clf_on_orig_simultaneously)):
+                if (
+                    (not separate_orig_clf)
+                    and (loss_name == "normal_crossent")
+                    and (not train_clf_on_orig_simultaneously)
+                ):
                     save_grads_to(clf.parameters(), "grad_tmp")
                 set_grads_to_none(clf_for_comparisons.parameters())
                 set_grads_to_none(clf.parameters())
@@ -808,16 +999,18 @@ def run_exp(
                 )
 
                 if simple_orig_pred_loss_weight > 0:
-                    assert not simple_clf_loss_weight > 0, "although theoretically possible"
+                    assert (
+                        not simple_clf_loss_weight > 0
+                    ), "although theoretically possible"
                     simple_pred_loss_adjusted_weight = simple_orig_pred_loss_weight / (
-                            simple_orig_pred_loss_weight + 1
+                        simple_orig_pred_loss_weight + 1
                     )
                     simple_to_orig_loss = (
-                            kl_divergence(
-                                orig_acts_grads[wanted_modules[-1]]["out_act"][0].detach(),
-                                simple_acts_grads[wanted_modules[-1]]["out_act"][0],
-                            )
-                            * simple_pred_loss_adjusted_weight
+                        kl_divergence(
+                            orig_acts_grads[wanted_modules[-1]]["out_act"][0].detach(),
+                            simple_acts_grads[wanted_modules[-1]]["out_act"][0],
+                        )
+                        * simple_pred_loss_adjusted_weight
                     )
                     dist_loss = dist_loss / (simple_orig_pred_loss_weight + 1)
                 else:
@@ -825,30 +1018,38 @@ def run_exp(
 
                 if train_clf_on_orig_simultaneously:
                     clf_loss = th.nn.functional.cross_entropy(
-                        orig_acts_grads[wanted_modules[-1]]['out_act'][0],
-                        y)
+                        orig_acts_grads[wanted_modules[-1]]["out_act"][0], y
+                    )
                 else:
                     clf_loss = th.zeros_like(dist_loss)
 
                 if simple_clf_loss_weight > 0:
-                    assert not simple_orig_pred_loss_weight > 0, "although theoretically possible"
+                    assert (
+                        not simple_orig_pred_loss_weight > 0
+                    ), "although theoretically possible"
                     simple_clf_loss = th.nn.functional.cross_entropy(
-                        simple_acts_grads[wanted_modules[-1]]['out_act'][0],
-                        y)
-                    clf_loss = weighted_sum(1, 1, clf_loss, simple_clf_loss_weight, simple_clf_loss)
+                        simple_acts_grads[wanted_modules[-1]]["out_act"][0], y
+                    )
+                    clf_loss = weighted_sum(
+                        1, 1, clf_loss, simple_clf_loss_weight, simple_clf_loss
+                    )
                 f_simple_loss_before = simple_to_orig_loss
                 f_simple_loss = dist_loss
                 f_orig_loss = clf_loss
                 if dist_threshold is not None:
-                    assert detach_bpd_factors is True, "this was more for keeping track of the fix in exps"
-                    bpd_factors = th.clamp((dist_threshold - dists_per_example) / 0.1, 0, 1).detach()
+                    assert (
+                        detach_bpd_factors is True
+                    ), "this was more for keeping track of the fix in exps"
+                    bpd_factors = th.clamp(
+                        (dist_threshold - dists_per_example) / 0.1, 0, 1
+                    ).detach()
                 else:
                     bpd_factors = th.ones_like(X[:, 0, 0, 0])
             else:
                 assert loss_name == "one_step"
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (
-                        f_clf,
-                        f_opt_clf,
+                    f_clf,
+                    f_opt_clf,
                 ):
                     random_states = get_random_states()
                     f_simple_out = f_clf(simple_X_aug)
@@ -868,7 +1069,7 @@ def run_exp(
                 )
                 f_orig_loss = th.mean(f_orig_loss_per_ex)
                 bpd_factors = (
-                        (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
+                    (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
                 ).detach()
             bpd = get_bpd(gen, simple_X)
             bpd_loss = th.mean(bpd * bpd_factors)
@@ -891,30 +1092,30 @@ def run_exp(
                 bpd_loss=bpd_loss.item(),
             )
 
-            if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+            if train_clf_on_dist_loss or train_clf_on_orig_simultaneously:
                 opt_clf.zero_grad(set_to_none=True)
             opt_preproc.zero_grad(set_to_none=True)
             im_loss.backward()
             if th.isfinite(bpd).all().item() and grads_all_finite(opt_preproc):
-                batch_results['grad_bpd_finite'] = 1
+                batch_results["grad_bpd_finite"] = 1
                 opt_preproc.step()
-                if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                if train_clf_on_dist_loss or train_clf_on_orig_simultaneously:
                     opt_clf.step()
             else:
-                batch_results['grad_bpd_finite'] = 0
-            if (train_clf_on_dist_loss or train_clf_on_orig_simultaneously):
+                batch_results["grad_bpd_finite"] = 0
+            if train_clf_on_dist_loss or train_clf_on_orig_simultaneously:
                 opt_clf.zero_grad(set_to_none=True)
             opt_preproc.zero_grad(set_to_none=True)
 
             if (
-                    loss_name
-                    in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
-                    and (not separate_orig_clf)
-                    and (loss_name == 'normal_crossent')
-                    and (not train_clf_on_orig_simultaneously)
+                loss_name
+                in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
+                and (not separate_orig_clf)
+                and (loss_name == "normal_crossent")
+                and (not train_clf_on_orig_simultaneously)
             ):
                 restore_grads_from(clf.parameters(), "grad_tmp")
-            elif not (train_clf_on_orig_simultaneously):
+            elif (not train_clf_on_orig_simultaneously) and (not frozen_clf):
                 # Classifier training
                 if resample_augmentation_for_clf:
                     aug_m = get_aug_m(
@@ -924,6 +1125,11 @@ def run_exp(
                         extra_augs=extra_augs,
                     )
                 with th.no_grad():
+                    if preproc_name == "res_mix_glow_unet":
+                        glow_2d_out = unflat_glow(X)
+                        preproc[0].unet[1].block16x16.chans_to_cat = glow_2d_out[0]
+                        preproc[0].unet[1].block8x8.chans_to_cat = glow_2d_out[1]
+                        preproc[0].unet[1].block4x4.chans_to_cat = glow_2d_out[2]
                     simple_X = preproc(X)
                     simple_X_aug = aug_m(simple_X)
 
@@ -946,23 +1152,27 @@ def run_exp(
                     z2 = clf[1].compute_features(clf[0](X2))
                     simclr_loss = compute_nt_xent_loss(z1, z2)
                     clf_loss = (clf_loss + ssl_loss_factor * simclr_loss) / (
-                            1 + ssl_loss_factor
+                        1 + ssl_loss_factor
                     )
 
                 if train_ssl_orig_simple:
                     z_orig = clf[1].compute_features(clf[0](X_aug.detach()))
                     ssl_loss = compute_nt_xent_loss(z_simple, z_orig)
                     clf_loss = (clf_loss + ssl_loss_factor * ssl_loss) / (
-                            1 + ssl_loss_factor
+                        1 + ssl_loss_factor
                     )
 
                 opt_clf.zero_grad(set_to_none=True)
                 clf_loss.backward()
-                batch_results['clf_loss_simple_train'] = clf_loss.item()
-            if not (train_clf_on_orig_simultaneously):
+                batch_results["clf_loss_simple_train"] = clf_loss.item()
+            if (not train_clf_on_orig_simultaneously) and (not frozen_clf):
                 opt_clf.step()
                 opt_clf.zero_grad(set_to_none=True)
             nb_res.collect(**batch_results)
+        if first_batch_only and (
+            not (((i_epoch % 50) == 0) or (i_epoch == (n_epochs - 1)))
+        ):
+            continue
         clf.eval()
         preproc.eval()
         log.info(f"Epoch {i_epoch:d}")
@@ -977,8 +1187,8 @@ def run_exp(
         with torch.no_grad():
             for with_preproc in [True, False]:
                 for set_name, loader in (
-                        ("train", train_det_loader),
-                        ("test", testloader),
+                    ("train", train_det_loader),
+                    ("test", testloader),
                 ):
                     all_preds = []
                     all_ys = []
@@ -989,6 +1199,39 @@ def run_exp(
                         X = X.cuda()
                         y = y.cuda()
                         if with_preproc:
+                            if cat_clf_chans_for_preproc:
+                                X = X.requires_grad_(True)
+                                orig_acts_grads = get_in_out_activations_per_module(
+                                    clf,
+                                    X,
+                                    wanted_modules=wanted_modules,
+                                )
+                                i_wanted_feature_maps = [6, 11, 15]
+                                wanted_feature_maps = [
+                                    list(orig_acts_grads.values())[i]["out_act"][0]
+                                    for i in i_wanted_feature_maps
+                                ]
+                                encoder = preproc[0].encoder
+                                encoder.block32x32.chans_to_cat = wanted_feature_maps[
+                                    0
+                                ].detach()
+                                encoder.block16x16.chans_to_cat = wanted_feature_maps[
+                                    1
+                                ].detach()
+                                encoder.block8x8.chans_to_cat = wanted_feature_maps[
+                                    2
+                                ].detach()
+                            if preproc_name == "res_mix_glow_unet":
+                                glow_2d_out = unflat_glow(X)
+                                preproc[0].unet[
+                                    1
+                                ].block16x16.chans_to_cat = glow_2d_out[0]
+                                preproc[0].unet[1].block8x8.chans_to_cat = glow_2d_out[
+                                    1
+                                ]
+                                preproc[0].unet[1].block4x4.chans_to_cat = glow_2d_out[
+                                    2
+                                ]
                             X_preproced = preproc(X)
                             bpds = get_bpd(gen, X_preproced)
                             all_bpds.append(th_to_np(bpds))
@@ -1032,11 +1275,37 @@ def run_exp(
                 print(f"{key:20s} {nb_res_last_dict[key]:.1E}")
                 writer.add_scalar("nb_res_" + key, nb_res_last_dict[key], i_epoch)
                 results["nb_res_" + key] = nb_res_last_dict[key]
-            nb_res.metrics_df.to_pickle(os.path.join(output_dir, 'metrics_df.pkl.zip'))
+            nb_res.metrics_df.to_pickle(os.path.join(output_dir, "metrics_df.pkl.zip"))
 
             X, y = next(testloader.__iter__())
             X = X.cuda()
             y = y.cuda()
+            if preproc_name == "res_mix_glow_unet":
+                glow_2d_out = unflat_glow(X)
+                preproc[0].unet[1].block16x16.chans_to_cat = glow_2d_out[0]
+                preproc[0].unet[1].block8x8.chans_to_cat = glow_2d_out[1]
+                preproc[0].unet[1].block4x4.chans_to_cat = glow_2d_out[2]
+            if cat_clf_chans_for_preproc:
+                X = X.requires_grad_(True)
+                orig_acts_grads = get_in_out_activations_per_module(
+                    clf,
+                    X,
+                    wanted_modules=wanted_modules,
+                )
+                i_wanted_feature_maps = [6, 11, 15]
+                wanted_feature_maps = [
+                    list(orig_acts_grads.values())[i]["out_act"][0]
+                    for i in i_wanted_feature_maps
+                ]
+                preproc[0].encoder.block32x32.chans_to_cat = wanted_feature_maps[
+                    0
+                ].detach()
+                preproc[0].encoder.block16x16.chans_to_cat = wanted_feature_maps[
+                    1
+                ].detach()
+                preproc[0].encoder.block8x8.chans_to_cat = wanted_feature_maps[
+                    2
+                ].detach()
             X_preproced = preproc(X)
             th.save(
                 X_preproced.detach().cpu(),

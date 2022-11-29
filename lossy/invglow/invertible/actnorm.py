@@ -9,16 +9,17 @@ def inverse_elu(y):
     x.data[1-mask] = th.log(y.data[1-mask])
     return x
 
+
 class ActNorm(nn.Module):
     def __init__(self, in_channel, scale_fn, eps=1e-8, verbose_init=True,
-                 init_eps=None):
+                 init_eps=None, initialized=False):
         super().__init__()
 
         self.loc = nn.Parameter(th.zeros(1, in_channel, 1, 1))
         self.log_scale = nn.Parameter(th.zeros(1, in_channel, 1, 1))
 
         self.initialize_this_forward = False
-        self.initialized = False
+        self.initialized = initialized
         self.scale_fn = scale_fn
         self.eps = eps
         self.verbose_init = verbose_init
@@ -30,6 +31,7 @@ class ActNorm(nn.Module):
                 self.init_eps = 1e-1
         else:
             self.init_eps = init_eps
+
 
     def initialize(self, x):
         with th.no_grad():

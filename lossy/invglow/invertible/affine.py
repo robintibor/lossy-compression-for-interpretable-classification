@@ -24,6 +24,56 @@ class AdditiveCoefs(nn.Module):
         return (add, raw_scale)
 
 
+class AffineModifierClampEps(nn.Module):
+    def __init__(self, sigmoid_or_exp_scale, add_first, eps, ):
+        super().__init__()
+        self.sigmoid_or_exp_scale = sigmoid_or_exp_scale
+        self.add_first = add_first
+        self.eps = eps
+
+    def forward(self, x2, coefs):
+        add, raw_scale = coefs
+
+        if raw_scale is not None:
+            s, logdet = self.get_scale_and_logdet(raw_scale)
+        else:
+            logdet = 0
+
+        if self.add_first and (add is not None):
+            x2 = x2 + add
+        if raw_scale is not None:
+            x2 = x2 * s
+        if (not self.add_first) and (add is not None):
+            x2 = x2 + add
+        return x2, logdet
+
+    def get_scale_and_logdet(self, raw_scale):
+        if self.sigmoid_or_exp_scale == 'sigmoid':
+            s = th.sigmoid(raw_scale + 2).clamp_min(self.eps)
+        else:
+            assert self.sigmoid_or_exp_scale == 'exp'
+            s = th.exp(raw_scale).clamp_min(self.eps)
+        logdet = th.sum(th.log(s).view(s.shape[0], -1), 1)
+        return s, logdet
+
+    def invert(self, x2, coefs):
+        add, raw_scale = coefs
+        if raw_scale is not None:
+            s, logdet = self.get_scale_and_logdet(raw_scale)
+        else:
+            logdet = 0
+
+        if (not self.add_first) and (add is not None):
+            x2 = x2 - add
+
+        if raw_scale is not None:
+            x2 = x2 / s
+
+        if (self.add_first) and (add is not None):
+            x2 = x2 - add
+        return x2, logdet
+
+
 class AffineModifier(nn.Module):
     def __init__(self, sigmoid_or_exp_scale, add_first, eps, ):
         super().__init__()

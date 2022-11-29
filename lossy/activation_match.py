@@ -78,7 +78,7 @@ def get_in_out_activations_per_module(
     wanted_modules=None,
 ):
     if wanted_modules is None:
-        wanted_modules = net.modules()
+        wanted_modules = list(net.modules())
 
     data_parallel = hasattr(net, "device_ids")
     module_to_vals = {m: {} for m in wanted_modules}
@@ -104,19 +104,22 @@ def get_in_out_activations_per_module(
         ] = input
         if hasattr(output, "register_hook"):
             output = (output,)
+        if hasattr(output[0], "device"):
+            output_device_index = output[0].device.index
+        else:
+            output_device_index = output[0][0].device.index
         module_to_vals[orig_module]["out_act"][
-            device_id_to_i_list[output[0].device.index]
+            device_id_to_i_list[output_device_index]
         ] = output
 
     handles = []
-    for module in wanted_modules:
+    for module in module_to_vals:
         handle = module.register_forward_hook(
             partial(append_activations, orig_module=module)
         )
         handles.append(handle)
     try:
         _ = net(X)
-
     finally:
         for h in handles:
             h.remove()
@@ -215,7 +218,10 @@ def get_in_out_acts_and_in_out_grads_per_module(
             h.remove()
     for m in module_to_vals:
         # flatten nested list again
-        for key in ["in_act", "out_act",]:# "in_grad", "out_grad"]:
+        for key in [
+            "in_act",
+            "out_act",
+        ]:  # "in_grad", "out_grad"]:
             module_to_vals[m][key] = [t for l in module_to_vals[m][key] for t in l]
     return module_to_vals
 
@@ -960,11 +966,14 @@ def normed_mse(val_x, val_ref, *args, **kwargs):
 def normed_sse(x_vals, ref_vals, eps=1e-20):
     diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
-    return diffs / (sum_squares + eps)
+    return diffs / (sum_squares.clamp_min(eps))
 
 
 def normed_sse_one_sided(x_vals, ref_vals, eps=1e-20):
-    diffs = th.sum(th.square(th.nn.functional.relu(ref_vals - x_vals)), dim=tuple(range(1, len(x_vals.shape))))
+    diffs = th.sum(
+        th.square(th.nn.functional.relu(ref_vals - x_vals)),
+        dim=tuple(range(1, len(x_vals.shape))),
+    )
     sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     return diffs / (sum_squares + eps)
 
@@ -973,6 +982,17 @@ def normed_sse_detached_norm(x_vals, ref_vals, eps=1e-20):
     diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     sum_squares = th.sum(th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape))))
     return diffs / (sum_squares + eps).detach()
+
+
+def normed_sse_larger_detached_norm(x_vals, ref_vals, eps=1e-20):
+    diffs = th.sum(th.square(x_vals - ref_vals), dim=tuple(range(1, len(x_vals.shape))))
+    sum_squares_ref = th.sum(
+        th.square(ref_vals), dim=tuple(range(1, len(x_vals.shape)))
+    )
+    sum_squares_x = th.sum(
+        th.square(x_vals), dim=tuple(range(1, len(x_vals.shape)))
+    )
+    return diffs / (th.maximum(sum_squares_x, sum_squares_ref)  + eps).detach()
 
 
 def normed_l1(x_vals, ref_vals, eps=1e-20):

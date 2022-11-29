@@ -532,7 +532,6 @@ def restrict_to_classes(loader, i_classes, remap_labels):
         drop_last=loader.drop_last,
     )
 
-
 def restrict_dataset_to_classes(dataset, i_classes, remap_labels):
     dataset = deepcopy(dataset)
     found_key = None

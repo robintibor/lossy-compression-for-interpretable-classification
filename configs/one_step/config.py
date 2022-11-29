@@ -61,14 +61,14 @@ def get_grid_param_list():
     # ]
 
     data_params = dictlistprod(
-        {#"cifar10", "mnist", "fashionmnist",
+        {  # "cifar10", "mnist", "fashionmnist",
             "dataset": ["cifar10"],  # , 'mnist', 'fashionmnist', 'svhn'],
             #'dataset': ['cifar10'],#, 'mnist'],
             "saved_model_folder": [
                 None
             ],  # ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
             #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
-            "mimic_cxr_target": [None],#]'pleural_effusion'],
+            "mimic_cxr_target": [None],  # ]'pleural_effusion'],
             "first_n": [None],
         }
     )
@@ -87,9 +87,11 @@ def get_grid_param_list():
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
-            "dist_threshold": [0.1,0.2,0.3,0.4],#],#0.05,
+            "dist_threshold": [0.1, 0.2, 0.3, 0.4],  # ],#0.05,
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
+            "frozen_clf": [False],
+            "first_batch_only": [False],
         }
     )
 
@@ -123,12 +125,11 @@ def get_grid_param_list():
 
     noise_params = dictlistprod(
         {
-            "noise_augment_level": [1e-3],#0,
+            "noise_augment_level": [0],  # 0,
             "trivial_augment": [False],
             "extra_augs": [False],
         },
     )
-
 
     quantize_params = [
         #     {
@@ -165,7 +166,6 @@ def get_grid_param_list():
         }
     )
 
-
     model_params = dictlistprod(
         {
             "depth": [16],
@@ -178,34 +178,82 @@ def get_grid_param_list():
             "norm_simple_convnet": ["none"],
             "pooling": ["avgpooling"],
             "external_pretrained_clf": [False],
-            "glow_model_path_32x32": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"], #/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th
+            "glow_model_path_32x32": [
+                "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+            ],  # /home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th
             "soft_clamp_0_1": [True],
             "unet_use_bias": [True],
         }
     )
 
-    preproc_params = dictlistprod({
-       #"lr_preproc": [1e-4,],
-        #"preproc_name": ["glow_with_resnet"],#res_unet
-    }) + dictlistprod({
-        #"lr_preproc": [3e-4,],
-        #    "preproc_name": ["unet",],#res_unet
-    })+ dictlistprod({
-        # "lr_preproc": [5e-4,],
-        # "preproc_name": ["res_unet",],#res_unet
-    })+ dictlistprod({
-       # "lr_preproc": [3e-4,],
-       # "preproc_name": ["on_top_of_glow",],#res_unet
-    })+ dictlistprod({
-        #"lr_preproc": [3e-4,],
-        #"preproc_name": ["res_blend_unet",],#res_unet
-    }) + dictlistprod({
-        "lr_preproc": [3e-4,],
-        "preproc_name": ["res_mix_unet",],#res_unet
-    }) + dictlistprod({
-        #"lr_preproc": [3e-4,],
-        #"preproc_name": ["res_mix_grey_unet",],#res_unet
-    }
+    preproc_params = (
+        dictlistprod(
+            {
+                # "lr_preproc": [1e-4,],
+                # "preproc_name": ["glow_with_resnet"],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans": [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                # "lr_preproc": [3e-4,],
+                # "preproc_name": ["unet",],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans" [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                # "lr_preproc": [5e-4,],
+                # "preproc_name": ["res_unet",],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans": [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                # "lr_preproc": [3e-4,],
+                # "preproc_name": ["on_top_of_glow",],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans": [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                # "lr_preproc": [3e-4,],
+                # "preproc_name": ["res_blend_unet",],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans": [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                "lr_preproc": [
+                    3e-4,
+                ],
+                "preproc_name": [
+                    "res_mix_unet",
+                ],  # res_unet
+                "cat_clf_chans_for_preproc": [False],
+                "merge_weight_clf_chans": [None],
+                "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                # "lr_preproc": [3e-4,],
+                # "preproc_name": ["res_mix_grey_unet",],#res_unet
+                # "cat_clf_chans_for_preproc": [False],
+                # "merge_weight_clf_chans": [None],
+                # "n_pretrain_preproc_epochs": [0],
+            }
+        )
     )
 
     optim_params = dictlistprod(
@@ -213,10 +261,11 @@ def get_grid_param_list():
             "resample_augmentation": [False],  # default this was True
             "resample_augmentation_for_clf": [False],  # default this was False
             "std_aug_magnitude": [None],  # 0.25
-            "weight_decay": [1e-5],#[1e-5],
+            "weight_decay": [1e-5],  # [1e-5],
             "lr_clf": [
                 1e-3,
             ],  # 5e-4,
+            "weight_decay_preproc": [5e-5],
             "threshold": [
                 0.1,
             ],
@@ -224,11 +273,11 @@ def get_grid_param_list():
                 "adamw",
             ],
             "bpd_weight": [
-                #0.7,
-                #0.8,
-                #0.9,
+                # 0.7,
+                # 0.8,
+                # 0.9,
                 1,
-                #0.5,
+                # 0.5,
             ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
     )
@@ -317,6 +366,12 @@ def run(
     simple_clf_loss_weight,
     soft_clamp_0_1,
     unet_use_bias,
+    frozen_clf,
+    first_batch_only,
+    cat_clf_chans_for_preproc,
+    merge_weight_clf_chans,
+    weight_decay_preproc,
+    n_pretrain_preproc_epochs,
 ):
     if debug:
         n_epochs = 3
@@ -353,7 +408,7 @@ def run(
     os.environ[
         "normal_glow_path"
     ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
+    os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
     from lossy.experiments.one_step.run import run_exp
 
     results = run_exp(**kwargs)
