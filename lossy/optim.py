@@ -10,6 +10,37 @@ import logging
 log = logging.getLogger(__name__)
 
 
+class PercentileGradClip(Optimizer):
+    def __init__(self, base_optim, percentile, n_history):
+        # mostly forward calls to base optim
+        # https://stackoverflow.com/a/1445289
+        self.__dict__ = base_optim.__dict__
+        self.base_optim = base_optim
+        self.percentile = percentile
+        self.n_history = n_history
+        self.grad_norms = []
+        
+
+    def step(self):
+        grad_norm = th.stack(
+            [th.norm(p.grad,p=2)
+             for g in self.base_optim.param_groups for p in g['params']]).mean().item()
+        self.grad_norms.append(grad_norm)
+        if len(self.grad_norms) > self.n_history:
+            self.grad_norms = self.grad_norms[1:]
+        max_grad_norm = np.percentile(self.grad_norms, self.percentile,
+                                     interpolation='lower')
+        
+        if grad_norm > max_grad_norm:
+            factor = max_grad_norm / grad_norm
+            for g in self.base_optim.param_groups:
+                for p in g['params']:
+                    p.grad.data.multiply_(factor)
+            
+        self.base_optim.step()
+        
+        
+
 def grads_all_finite(optimizer):
     for g in optimizer.param_groups:
         for p in g['params']:

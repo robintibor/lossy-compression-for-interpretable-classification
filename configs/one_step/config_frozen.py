@@ -50,7 +50,7 @@ def get_grid_param_list():
             "stop_clf_grad_through_simple": [False],
             "simple_clf_loss_weight": [0,],
             "frozen_clf": [True],
-            "n_epochs": [1],
+            "n_epochs": [3],
             "simple_orig_pred_loss_weight": [0],
             "dist_threshold": [0.1, 0.2, 0.3, 0.4, 0.5],  # ],#0.05,
             "noise_augment_level": [0],
@@ -119,9 +119,10 @@ def get_grid_param_list():
             {
                 "lr_preproc": [1e-4,],
                 "preproc_name": ["glow_with_pure_resnet"],#res_unet
-                "cat_clf_chans_for_preproc": [False],#, True],
+                "cat_clf_chans_for_preproc": [False, ],#, True],
                 "merge_weight_clf_chans": [1e-2],
-                "n_pretrain_preproc_epochs": [0,1],
+                "n_pretrain_preproc_epochs": [0,],
+                "encoder_clip_eps": [1e-3,1e-2,1e-1],
             }
         )
         + dictlistprod(
@@ -139,13 +140,16 @@ def get_grid_param_list():
     data_params = dictlistprod(
         {
             # 610 better..
-            "saved_model_folder": ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/537/'],
+            "saved_model_folder": [
+                '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/537/',
+            #    '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/610/'
+            ],
         })
 
     model_params = dictlistprod({
         #"/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
         "glow_model_path_32x32": [
-            "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"
+            "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
         ],
     })
 

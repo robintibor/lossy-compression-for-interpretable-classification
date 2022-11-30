@@ -262,6 +262,7 @@ def get_grid_param_list():
             "resample_augmentation_for_clf": [False],  # default this was False
             "std_aug_magnitude": [None],  # 0.25
             "weight_decay": [1e-5],  # [1e-5],
+            "clip_grad_percentile": [80],
             "lr_clf": [
                 1e-3,
             ],  # 5e-4,
@@ -372,6 +373,8 @@ def run(
     merge_weight_clf_chans,
     weight_decay_preproc,
     n_pretrain_preproc_epochs,
+    encoder_clip_eps,
+    clip_grad_percentile,
 ):
     if debug:
         n_epochs = 3
