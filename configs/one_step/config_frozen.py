@@ -122,7 +122,7 @@ def get_grid_param_list():
                 "cat_clf_chans_for_preproc": [False, ],#, True],
                 "merge_weight_clf_chans": [1e-2],
                 "n_pretrain_preproc_epochs": [0,],
-                "encoder_clip_eps": [1e-3,1e-2,1e-1],
+                "encoder_clip_eps": [1e-1],
             }
         )
         + dictlistprod(

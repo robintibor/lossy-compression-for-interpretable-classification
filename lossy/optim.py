@@ -2,6 +2,7 @@ import torch
 import torch as th
 from torch.optim.optimizer import Optimizer, required
 from lossy.util import np_to_th, th_to_np
+import numpy as np
 try:
     import higher
 except ModuleNotFoundError:
@@ -22,25 +23,25 @@ class PercentileGradClip(Optimizer):
         
 
     def step(self):
-        grad_norm = th.stack(
-            [th.norm(p.grad,p=2)
-             for g in self.base_optim.param_groups for p in g['params']]).mean().item()
-        self.grad_norms.append(grad_norm)
-        if len(self.grad_norms) > self.n_history:
-            self.grad_norms = self.grad_norms[1:]
-        max_grad_norm = np.percentile(self.grad_norms, self.percentile,
-                                     interpolation='lower')
-        
-        if grad_norm > max_grad_norm:
-            factor = max_grad_norm / grad_norm
-            for g in self.base_optim.param_groups:
-                for p in g['params']:
-                    p.grad.data.multiply_(factor)
-            
+        with th.no_grad():  # not sure if necessary
+            grad_norm = th.stack(
+                [th.norm(p.grad,p=2)
+                 for g in self.base_optim.param_groups for p in g['params']]).mean().item()
+            self.grad_norms.append(grad_norm)
+            if len(self.grad_norms) > self.n_history:
+                self.grad_norms = self.grad_norms[1:]
+            max_grad_norm = np.percentile(self.grad_norms, self.percentile,
+                                         interpolation='lower')
+
+            if grad_norm > max_grad_norm:
+                factor = max_grad_norm / grad_norm
+                for g in self.base_optim.param_groups:
+                    for p in g['params']:
+                        p.grad.data.multiply_(factor)
+
         self.base_optim.step()
         
         
-
 def grads_all_finite(optimizer):
     for g in optimizer.param_groups:
         for p in g['params']:

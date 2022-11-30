@@ -59,6 +59,7 @@ from lossy.losses import grad_normed_loss
 from lossy.losses import kl_divergence
 from lossy.modules import Expression
 from lossy.optim import grads_all_finite
+from lossy.optim import PercentileGradClip
 from lossy.optim import set_grads_to_none
 from lossy.plot import stack_images_in_rows
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
@@ -515,6 +516,9 @@ def run_exp(
 
     if separate_orig_clf:
         orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
+    # problems if done before deepcopy
+    opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 200)
+    opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 200)
 
     if data_parallel:
         clf = nn.DataParallel(clf)
@@ -721,6 +725,7 @@ def run_exp(
         weight_decay=weight_decay_preproc,
         betas=beta_preproc,
     )
+    opt_preproc = PercentileGradClip(opt_preproc, clip_grad_percentile, 200)
     if data_parallel:
         preproc = nn.DataParallel(preproc)
 
@@ -1104,15 +1109,6 @@ def run_exp(
                 batch_results["grad_bpd_finite"] = 1
                 preproc_grad_norm = th.stack([
                     th.norm(p.grad) for n, p in preproc.named_parameters() if p.requires_grad]).mean()
-                if (nb_res.metrics_average is not None):
-                    # https://github.com/Lightning-AI/lightning/issues/2963#issuecomment-804432376
-                    # https://github.com/pseeth/autoclip/blob/master/autoclip.py
-                    max_allowed_norm = np.percentile(nb_res.metrics_df.preproc_grad_norm.iloc[-200:], clip_grad_percentile)
-                    if preproc_grad_norm > max_allowed_norm:
-                        factor =  max_allowed_norm / preproc_grad_norm 
-                        for n,p in preproc.named_parameters():
-                            if p.requires_grad:
-                                p.grad.data.multiply_(factor)
                 batch_results["preproc_grad_norm"] = preproc_grad_norm.item()
                 opt_preproc.step()
                 if train_clf_on_dist_loss or train_clf_on_orig_simultaneously:
@@ -1142,6 +1138,21 @@ def run_exp(
                         extra_augs=extra_augs,
                     )
                 with th.no_grad():
+                    if cat_clf_chans_for_preproc:
+                        i_wanted_feature_maps = [6, 11, 15]
+                        wanted_feature_maps = [
+                            list(orig_acts_grads.values())[i]["out_act"][0]
+                            for i in i_wanted_feature_maps
+                        ]
+                        preproc[0].encoder.block32x32.chans_to_cat = wanted_feature_maps[
+                            0
+                        ].detach()
+                        preproc[0].encoder.block16x16.chans_to_cat = wanted_feature_maps[
+                            1
+                        ].detach()
+                        preproc[0].encoder.block8x8.chans_to_cat = wanted_feature_maps[
+                            2
+                        ].detach()
                     if preproc_name == "res_mix_glow_unet":
                         glow_2d_out = unflat_glow(X)
                         preproc[0].unet[1].block16x16.chans_to_cat = glow_2d_out[0]
@@ -1219,7 +1230,7 @@ def run_exp(
                             if cat_clf_chans_for_preproc:
                                 X = X.requires_grad_(True)
                                 orig_acts_grads = get_in_out_activations_per_module(
-                                    clf,
+                                    clf_for_comparisons,
                                     X,
                                     wanted_modules=wanted_modules,
                                 )
@@ -1305,7 +1316,7 @@ def run_exp(
             if cat_clf_chans_for_preproc:
                 X = X.requires_grad_(True)
                 orig_acts_grads = get_in_out_activations_per_module(
-                    clf,
+                    clf_for_comparisons,
                     X,
                     wanted_modules=wanted_modules,
                 )

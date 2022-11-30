@@ -76,7 +76,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [100],
+            "n_epochs": [2],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -87,7 +87,7 @@ def get_grid_param_list():
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
-            "dist_threshold": [0.1, 0.2, 0.3, 0.4],  # ],#0.05,
+            "dist_threshold": [0.1, 0.2, 0.3, 0.4,0.5],  # ],#0.05,
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
             "frozen_clf": [False],
@@ -183,6 +183,7 @@ def get_grid_param_list():
             ],  # /home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th
             "soft_clamp_0_1": [True],
             "unet_use_bias": [True],
+            "encoder_clip_eps": [1e-1],
         }
     )
 
@@ -234,15 +235,25 @@ def get_grid_param_list():
         )
         + dictlistprod(
             {
-                "lr_preproc": [
-                    3e-4,
-                ],
-                "preproc_name": [
-                    "res_mix_unet",
-                ],  # res_unet
-                "cat_clf_chans_for_preproc": [False],
-                "merge_weight_clf_chans": [None],
-                "n_pretrain_preproc_epochs": [0],
+               # "lr_preproc": [
+               #     3e-4,
+               # ],
+               # "preproc_name": [
+               #     "res_mix_unet",
+               # ],  # res_unet
+               # "cat_clf_chans_for_preproc": [False],
+               # "merge_weight_clf_chans": [None],
+               # "n_pretrain_preproc_epochs": [0],
+            }
+        )
+        + dictlistprod(
+            {
+                "lr_preproc": [1e-4,],
+                "preproc_name": ["glow_with_pure_resnet"],#res_unet
+                "cat_clf_chans_for_preproc": [True],#, True],
+                "merge_weight_clf_chans": [1e-2],
+                "n_pretrain_preproc_epochs": [0,],
+                "encoder_clip_eps": [1e-1],
             }
         )
         + dictlistprod(
