@@ -52,7 +52,7 @@ def get_grid_param_list():
             "frozen_clf": [True],
             "n_epochs": [3],
             "simple_orig_pred_loss_weight": [0],
-            "dist_threshold": [0.1, 0.2, 0.3, 0.4, 0.5],  # ],#0.05,
+            "dist_threshold": [0.05, 0.1, 0.2, 0.3, 0.4, 0.5],  # ],#0.05,
             "noise_augment_level": [0],
         })
 
@@ -139,12 +139,22 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {
+            # "dataset": ['cifar10'],
+            # 610 better..
+            # "saved_model_folder": [
+            #    '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/537/',
+            #    '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/610/'
+            # ],
+        }) + dictlistprod(
+        {
+            "dataset": ['svhn'],
             # 610 better..
             "saved_model_folder": [
-                '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/537/',
+                '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/383/',
             #    '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/610/'
             ],
         })
+    
 
     model_params = dictlistprod({
         #"/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"

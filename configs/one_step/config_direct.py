@@ -43,7 +43,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             "separate_orig_clf": [False],
-            "dist_name": ["normed_sse_detached_norm", "normed_sse"],
+            "dist_name": ["normed_sse"],#"normed_sse_detached_norm", 
             "train_clf_on_dist_loss": [True],
             "train_clf_on_orig_simultaneously": [True],
             "orig_loss_weight": [10],

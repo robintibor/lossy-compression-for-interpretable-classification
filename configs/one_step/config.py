@@ -62,7 +62,7 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {  # "cifar10", "mnist", "fashionmnist",
-            "dataset": ["cifar10"],  # , 'mnist', 'fashionmnist', 'svhn'],
+            "dataset": ["svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
             #'dataset': ['cifar10'],#, 'mnist'],
             "saved_model_folder": [
                 None
@@ -76,7 +76,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [2],
+            "n_epochs": [3],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -87,7 +87,8 @@ def get_grid_param_list():
             "simple_orig_pred_loss_weight": [0],  # 4
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
-            "dist_threshold": [0.1, 0.2, 0.3, 0.4,0.5],  # ],#0.05,
+            "dist_threshold": [0.05, 0.1, 0.2, 0.3, 0.4,0.5],  # ],#0.05,
+            "dist_margin":  [0.1],#0.1
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
             "frozen_clf": [False],
@@ -250,9 +251,9 @@ def get_grid_param_list():
             {
                 "lr_preproc": [1e-4,],
                 "preproc_name": ["glow_with_pure_resnet"],#res_unet
-                "cat_clf_chans_for_preproc": [True],#, True],
+                "cat_clf_chans_for_preproc": [False],#, True],
                 "merge_weight_clf_chans": [1e-2],
-                "n_pretrain_preproc_epochs": [0,],
+                "n_pretrain_preproc_epochs": [2,],
                 "encoder_clip_eps": [1e-1],
             }
         )
@@ -288,7 +289,7 @@ def get_grid_param_list():
                 # 0.7,
                 # 0.8,
                 # 0.9,
-                1,
+                4,
                 # 0.5,
             ],  # [0.32,0.34,0.36,0.38,0.4],#[0.3,0.333,0.367,0.4,0.433,0.467,0.5],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
         }
@@ -386,6 +387,7 @@ def run(
     n_pretrain_preproc_epochs,
     encoder_clip_eps,
     clip_grad_percentile,
+    dist_margin,
 ):
     if debug:
         n_epochs = 3

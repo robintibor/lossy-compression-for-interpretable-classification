@@ -363,6 +363,7 @@ def run_exp(
     n_pretrain_preproc_epochs,
     encoder_clip_eps,
     clip_grad_percentile,
+    dist_margin,
 ):
     assert model_name in [
         "wide_nf_net",
@@ -516,9 +517,9 @@ def run_exp(
 
     if separate_orig_clf:
         orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
-    # problems if done before deepcopy
+        # problems if done before deepcopy
+        opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 200)
     opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 200)
-    opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 200)
 
     if data_parallel:
         clf = nn.DataParallel(clf)
@@ -915,8 +916,8 @@ def run_exp(
                         2
                     ].detach()
 
-                simple_X = preproc(X)
-                simple_X_aug = aug_m(simple_X)
+                    simple_X = preproc(X)
+                    simple_X_aug = aug_m(simple_X)
 
                 set_random_states(random_states)
                 if train_clf_on_dist_loss and stop_clf_grad_through_simple:
@@ -1050,7 +1051,7 @@ def run_exp(
                             detach_bpd_factors is True
                     ), "this was more for keeping track of the fix in exps"
                     bpd_factors = th.clamp(
-                        (dist_threshold - dists_per_example) / 0.1, 0, 1
+                        (dist_threshold - dists_per_example) / dist_margin, 0, 1
                     ).detach()
                 else:
                     bpd_factors = th.ones_like(X[:, 0, 0, 0])

@@ -49,6 +49,7 @@ def get_grid_param_list():
             "orig_loss_weight": [0],
             "stop_clf_grad_through_simple": [False],
             "simple_clf_loss_weight": [0,],
+            "lr_clf": [3e-4],
         })
 
     grid_params = product_of_list_of_lists_of_dicts(
