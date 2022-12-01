@@ -62,6 +62,7 @@ from lossy.optim import grads_all_finite
 from lossy.optim import PercentileGradClip
 from lossy.optim import set_grads_to_none
 from lossy.plot import stack_images_in_rows
+from lossy.preproc import get_preprocessor
 from lossy.simclr import compute_nt_xent_loss, modified_simclr_pipeline_transform
 from lossy.util import np_to_th, th_to_np
 from lossy.util import set_random_seeds
@@ -213,9 +214,15 @@ def get_clf_and_optim(
             # normalization included in model in SimpleBits training
             clf.load_state_dict(saved_clf_state_dict)
         else:
-            saved_clf_state_dict = th.load(
-                os.path.join(saved_model_folder, "state_dict.th")
-            )
+            try:
+                # used to have nf_net in name later removed that
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
+                )
+            except FileNotFoundError:
+                saved_clf_state_dict = th.load(
+                    os.path.join(saved_model_folder, "state_dict.th")
+                )
             # normalization was not included in model in regular training
             clf[1].load_state_dict(saved_clf_state_dict)
 
@@ -518,8 +525,8 @@ def run_exp(
     if separate_orig_clf:
         orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
         # problems if done before deepcopy
-        opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 200)
-    opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 200)
+        opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 400)
+    opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 400)
 
     if data_parallel:
         clf = nn.DataParallel(clf)
@@ -553,170 +560,19 @@ def run_exp(
         gen = nn.DataParallel(gen)
 
     log.info("Create preprocessor...")
-
-    def to_plus_minus_one(x):
-        return (x * 2) - 1
-
-    if preproc_name == "unet":
-        preproc = nn.Sequential(
-            Expression(to_plus_minus_one),
-            UnetGenerator(
-                3,
-                3,
-                num_downs=5,
-                final_nonlin=nn.Sigmoid,
-                norm_layer=AffineOnChans,
-                nonlin_down=nn.ELU,
-                nonlin_up=nn.ELU,
-                use_bias=unet_use_bias,
-            ),
-        ).cuda()
-    elif preproc_name == "res_unet":
-        preproc = WrapResidualIdentityUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGenerator(
-                    3,
-                    3,
-                    num_downs=5,
-                    final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                    use_bias=unet_use_bias,
-                ),
-            ),
-            final_nonlin=nn.Sigmoid(),
-        ).cuda()
-    elif preproc_name == "res_blend_unet":
-        preproc = WrapResidualAndBlendUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGenerator(
-                    3,
-                    6,
-                    num_downs=5,
-                    final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                    use_bias=unet_use_bias,
-                ),
-            ),
-        ).cuda()
-    elif preproc_name == "res_mix_unet":
-        preproc = WrapResidualAndMixUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGenerator(
-                    3,
-                    6,
-                    num_downs=5,
-                    final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                    use_bias=unet_use_bias,
-                ),
-            ),
-        ).cuda()
-    elif preproc_name == "res_mix_grey_unet":
-        preproc = WrapResidualAndMixGreyUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGenerator(
-                    3,
-                    7,
-                    num_downs=5,
-                    ngf=64,  # 64
-                    final_nonlin=nn.Identity,
-                    norm_layer=AffineOnChans,  # SimpleLayerNorm,#nn.BatchNorm2d,#AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                    use_bias=unet_use_bias,
-                ),
-            ),
-        ).cuda()
-    elif preproc_name == "res_mix_glow_unet":
-        glow_out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
-        unflat_glow = UnflattenGlow(glow, glow_out_shapes)
-        preproc = WrapResidualAndMixUnet(
-            nn.Sequential(
-                Expression(to_plus_minus_one),
-                UnetGeneratorWithExtraInput(
-                    3,
-                    6,
-                    num_downs=5,
-                    final_nonlin=partial(AffineOnChans, 6),  # nn.Identity,
-                    norm_layer=AffineOnChans,
-                    nonlin_down=nn.ELU,
-                    nonlin_up=nn.ELU,
-                    use_bias=unet_use_bias,
-                ),
-            ),
-        ).cuda()
-        preproc.unet[1].model.model[4].factors.data[:] = 0.2
-    elif preproc_name == "glow":
-        preproc = get_glow_preproc(
-            glow,
-            encoder_name="glow",
-            cat_clf_chans=cat_clf_chans_for_preproc,
-            merge_weight_clf_chans=None,
-        )
-    elif preproc_name == "on_top_of_glow":
-        out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
-        preproc = OnTopOfGlowPreproc(glow, out_shapes).cuda()
-    elif preproc_name == "on_top_of_glow_mix":
-        out_shapes = [(6, 16, 16), (12, 8, 8), (48, 4, 4)]
-        preproc = OnTopOfGlowMixPreproc(glow, out_shapes).cuda()
-    elif preproc_name == "latent_z":
-        # first test batch is batch you mostly used for debugging
-        X, y = next(testloader.__iter__())
-        preproc = FixedLatentPreproc(glow, X)
-    elif preproc_name == "glow_with_pure_resnet":
-        preproc = get_glow_preproc(
-            glow=glow,
-            encoder_name="resnet",
-            cat_clf_chans=cat_clf_chans_for_preproc,
-            merge_weight_clf_chans=merge_weight_clf_chans,
-        )
-    else:
-        assert preproc_name == "glow_with_resnet"
-        preproc = get_glow_preproc(
-            glow,
-            encoder_name="glow_resnet",
-            cat_clf_chans=cat_clf_chans_for_preproc,
-            merge_weight_clf_chans=merge_weight_clf_chans,
-        )
-
-    if preproc_name in [
-        "glow_with_resnet",
-        "glow_with_pure_resnet",
-    ]:
-        for m in preproc.decoder.modules():
-            if hasattr(m, 'modifier'):
-                m.modifier = AffineModifierClampEps(
-                    m.modifier.sigmoid_or_exp_scale,
-                    m.modifier.add_first,
-                    encoder_clip_eps)
-
-    if preproc_name in [
-        "glow",
-        "on_top_of_glow",
-        "on_top_of_glow_mix",
-    ]:  # Old style, not sure if good
-        for m in glow.modules():
-            if m.__class__.__name__ == "AffineModifier":
-                m.eps = 5e-2
-
-    preproc_post = nn.Sequential()
-    if quantize_after_simplifier:
-        preproc_post.add_module("quantize", Expression(quantize_data))
-    if noise_after_simplifier:
-        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
-    if soft_clamp_0_1:
-        preproc_post.add_module("soft_clamp_to_0_1", Expression(soft_clamp_to_0_1))
-    preproc = nn.Sequential(preproc, preproc_post)
+    if not first_batch_only:
+        X = None
+    preproc = get_preprocessor(
+        preproc_name=preproc_name,
+        glow=glow,
+        encoder_clip_eps=encoder_clip_eps,
+        cat_clf_chans_for_preproc=cat_clf_chans_for_preproc,
+        merge_weight_clf_chans=merge_weight_clf_chans,
+        unet_use_bias=unet_use_bias,
+        quantize_after_simplifier=quantize_after_simplifier,
+        noise_after_simplifier=noise_after_simplifier,
+        soft_clamp_0_1=soft_clamp_0_1,
+        X=X)
 
     beta_preproc = (0.5, 0.99)
 
@@ -726,7 +582,7 @@ def run_exp(
         weight_decay=weight_decay_preproc,
         betas=beta_preproc,
     )
-    opt_preproc = PercentileGradClip(opt_preproc, clip_grad_percentile, 200)
+    opt_preproc = PercentileGradClip(opt_preproc, clip_grad_percentile, 400)
     if data_parallel:
         preproc = nn.DataParallel(preproc)
 
@@ -1112,7 +968,8 @@ def run_exp(
                     th.norm(p.grad) for n, p in preproc.named_parameters() if p.requires_grad]).mean()
                 batch_results["preproc_grad_norm"] = preproc_grad_norm.item()
                 opt_preproc.step()
-                if train_clf_on_dist_loss or train_clf_on_orig_simultaneously:
+                if ((train_clf_on_dist_loss or train_clf_on_orig_simultaneously) and
+                    grads_all_finite(opt_clf)):
                     opt_clf.step()
             else:
                 batch_results["grad_bpd_finite"] = 0
@@ -1195,7 +1052,8 @@ def run_exp(
                 clf_loss.backward()
                 batch_results["clf_loss_simple_train"] = clf_loss.item()
             if (not train_clf_on_orig_simultaneously) and (not frozen_clf):
-                opt_clf.step()
+                if grads_all_finite(opt_clf):
+                    opt_clf.step()
                 opt_clf.zero_grad(set_to_none=True)
             nb_res.collect(**batch_results)
         if first_batch_only and (

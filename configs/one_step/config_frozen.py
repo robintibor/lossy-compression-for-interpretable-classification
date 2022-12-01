@@ -148,7 +148,6 @@ def get_grid_param_list():
         }) + dictlistprod(
         {
             "dataset": ['svhn'],
-            # 610 better..
             "saved_model_folder": [
                 '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/383/',
             #    '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/610/'

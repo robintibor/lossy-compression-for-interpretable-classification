@@ -1,21 +1,21 @@
 from copy import deepcopy
+
+import numpy as np
+import torch as th
+from torch import nn
+
+from lossy.affine import AffineOnChans
+from lossy.image2image import CatExtraChannels
+from lossy.image2image import UnetGeneratorCompact
+from lossy.image2image import WrapResidualAndMixNonSigmoidUnet
+from lossy.image2image import WrapResidualNonSigmoidUnet
 from lossy.image_convert import glow_img_to_img_0_1
 from lossy.image_convert import img_0_1_to_glow_img
-from torch import nn
-import torch as th
-import numpy as np
-from lossy.wide_nf_net import wide_basic
-from lossy.image2image import WrapResidualNonSigmoidUnet
-from lossy.image2image import WrapResidualAndMixNonSigmoidUnet
-from lossy.image2image import UnetGeneratorCompact
-from lossy.affine import AffineOnChans
 from lossy.invglow.invertible.pure_model import NoLogDet
-
-from lossy.wide_nf_net import wide_basic, conv3x3, ScaledStdConv2d
-from lossy.invglow.invertible.view_as import Flatten2d
-from lossy.wide_nf_net import wide_basic
 from lossy.invglow.invertible.splitter import SubsampleSplitter
-from lossy.image2image import CatExtraChannels
+from lossy.invglow.invertible.view_as import Flatten2d
+from lossy.wide_nf_net import conv3x3, ScaledStdConv2d
+from lossy.wide_nf_net import wide_basic
 
 
 def get_glow_preproc(
@@ -94,7 +94,18 @@ def get_glow_preproc(
             "elu",
             cat_clf_chans=cat_clf_chans,
             merge_weight_clf_chans=merge_weight_clf_chans,
+            output_chans=[6, 12, 48],
         ).cuda()
+    elif encoder_name == "res_glow_resnet":
+        glow_encoder = ResidualGlowEncoder(Wide_NFResNet_Encoder(
+            16,
+            4,
+            0,
+            "elu",
+            cat_clf_chans=cat_clf_chans,
+            merge_weight_clf_chans=merge_weight_clf_chans,
+            output_chans=[6 * 2, 12 * 2, 48 * 2],
+        ), glow).cuda()
     else:
         assert encoder_name == "glow"
     glow_decoder = deepcopy(glow)
@@ -110,7 +121,7 @@ def get_glow_preproc(
 
 
 class GlowPreproc(nn.Module):
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, decoder,):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -122,6 +133,37 @@ class GlowPreproc(nn.Module):
         x_inv, _ = self.decoder.invert(z)
         x_inv = glow_img_to_img_0_1(x_inv)
         return x_inv
+
+
+class SoftplusCentered(nn.Module):
+    def forward(self, x):
+        offset = np.log(np.exp(1) - 1)
+        return th.nn.functional.softplus(x + offset)
+
+
+class ResidualGlowEncoder(nn.Module):
+    def __init__(self, encoder, glow):
+        super().__init__()
+        self.encoder = encoder
+        self.glow = [glow]  # not add to params
+        self.scale_nonlin = SoftplusCentered()# nn.Softplus()
+
+    def forward(self, x):
+        z_encoder = self.encoder(x)[0]
+        with th.no_grad():
+            z_glow = self.glow[0](x)[0]
+        assert len(z_encoder) == len(z_glow)
+        z_mixed = []
+        for a_z_encoder, a_z_glow in zip(z_encoder, z_glow):
+            if a_z_encoder.shape[1] == a_z_glow.shape[1]:
+                a_z_mixed = a_z_encoder + a_z_glow
+            else:
+                assert a_z_encoder.shape[1] == a_z_glow.shape[1] * 2
+                add, scale = th.chunk(a_z_encoder, 2, dim=1)
+                scale = self.scale_nonlin(scale)
+                a_z_mixed = add + a_z_glow.detach() * scale
+            z_mixed.append(a_z_mixed)
+        return z_mixed, 0
 
 
 class FixedLatentPreproc(nn.Module):
@@ -174,6 +216,7 @@ class Wide_NFResNet_Encoder(nn.Module):
         activation,
         cat_clf_chans,
         merge_weight_clf_chans,
+        output_chans,
         verbose=False,
     ):
         super().__init__()
@@ -256,7 +299,7 @@ class Wide_NFResNet_Encoder(nn.Module):
             ),
             nn.ELU(),
             ScaledStdConv2d(
-                nStages[1], 6, kernel_size=1, stride=1, padding=0, bias=True
+                nStages[1], output_chans[0], kernel_size=1, stride=1, padding=0, bias=True
             ),
             NoLogDet(Flatten2d()),
         )
@@ -267,7 +310,7 @@ class Wide_NFResNet_Encoder(nn.Module):
             ),
             nn.ELU(),
             ScaledStdConv2d(
-                nStages[2], 12, kernel_size=1, stride=1, padding=0, bias=True
+                nStages[2], output_chans[1], kernel_size=1, stride=1, padding=0, bias=True
             ),
             NoLogDet(Flatten2d()),
         )
@@ -278,7 +321,7 @@ class Wide_NFResNet_Encoder(nn.Module):
             ),
             nn.ELU(),
             ScaledStdConv2d(
-                nStages[3], 48, kernel_size=1, stride=1, padding=0, bias=True
+                nStages[3], output_chans[2], kernel_size=1, stride=1, padding=0, bias=True
             ),
             NoLogDet(Flatten2d()),
         )

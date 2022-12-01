@@ -62,10 +62,9 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {  # "cifar10", "mnist", "fashionmnist",
-            "dataset": ["svhn"],  # , 'mnist', 'fashionmnist', 'svhn'],
-            #'dataset': ['cifar10'],#, 'mnist'],
+            "dataset": ["cifar10"],  # , 'mnist', 'fashionmnist', 'svhn'],
             "saved_model_folder": [
-                None
+                '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
             ],  # ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
             #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
             "mimic_cxr_target": [None],  # ]'pleural_effusion'],
@@ -76,7 +75,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [3],
+            "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -88,7 +87,7 @@ def get_grid_param_list():
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
             "dist_threshold": [0.05, 0.1, 0.2, 0.3, 0.4,0.5],  # ],#0.05,
-            "dist_margin":  [0.1],#0.1
+            "dist_margin":  [1e-3],#0.1
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
             "frozen_clf": [False],
@@ -249,11 +248,21 @@ def get_grid_param_list():
         )
         + dictlistprod(
             {
+                # "lr_preproc": [1e-4,],
+                # "preproc_name": ["glow_with_pure_resnet"],#res_unet
+                # "cat_clf_chans_for_preproc": [False],#, True],
+                # "merge_weight_clf_chans": [1e-2],
+                # "n_pretrain_preproc_epochs": [2,],
+                # "encoder_clip_eps": [1e-1],
+            }
+        )
+        + dictlistprod(
+            {
                 "lr_preproc": [1e-4,],
-                "preproc_name": ["glow_with_pure_resnet"],#res_unet
+                "preproc_name": ["res_glow_with_pure_resnet"],#res_unet
                 "cat_clf_chans_for_preproc": [False],#, True],
                 "merge_weight_clf_chans": [1e-2],
-                "n_pretrain_preproc_epochs": [2,],
+                "n_pretrain_preproc_epochs": [0,],
                 "encoder_clip_eps": [1e-1],
             }
         )
