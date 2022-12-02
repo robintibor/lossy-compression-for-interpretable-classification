@@ -70,7 +70,7 @@ def run_exp(
         eval_batch_size=512,
         split_test_off_train=split_test_off_train,
     )
-    if dataset in ['cifar10', 'cifar100', 'stripes']:
+    if dataset in ['cifar10', 'cifar100', 'stripes', 'imagenet32']:
         # but won't be applied for stripes actually atm
         transform_train = transforms.Compose(
             [
@@ -80,8 +80,16 @@ def run_exp(
                 transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )  # meanstd transformation
+    elif dataset == 'svhn':
+        transform_train = transforms.Compose(
+            [
+                transforms.RandomCrop(32, padding=4),
+                transforms.ToTensor(),
+                transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
+            ]
+        )
     else:
-        assert dataset in ['mnist', 'fashionmnist']
+        assert dataset in ['mnist', 'fashionmnist',]
         transform_train = transforms.Compose(
             [
                 transforms.Resize(
@@ -93,7 +101,7 @@ def run_exp(
                 transforms.Normalize(wide_nf_net.mean[dataset], wide_nf_net.std[dataset]),
             ]
         )  # meanstd transformation
-    if dataset in ['cifar10', 'cifar100', 'stripes']:
+    if dataset in ['cifar10', 'cifar100', 'stripes', 'svhn', 'imagenet32']:
         # but won't be applied for stripes actually atm
         transform_test = transforms.Compose(
             [
@@ -102,6 +110,7 @@ def run_exp(
             ]
         )
     else:
+        assert dataset in ['mnist', 'fashionmnist',]
         transform_test = transforms.Compose(
             [
                 transforms.Resize(
@@ -129,7 +138,7 @@ def run_exp(
         assert hasattr(test_set, 'transform')
         assert hasattr(test_set.transforms, 'transform')
         test_set.transform = transform_test
-        test_set.transforms.transform = transform_testS
+        test_set.transforms.transform = transform_test
     if model_name == 'wide_nf_net':
         from lossy.wide_nf_net import conv_init, Wide_NFResNet
 
