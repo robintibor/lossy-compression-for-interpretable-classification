@@ -62,20 +62,37 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {  # "cifar10", "mnist", "fashionmnist",
-            "dataset": ["cifar10"],  # , 'mnist', 'fashionmnist', 'svhn'],
-            "saved_model_folder": [
-                '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
-            ],  # ['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'],#[None],
-            #'saved_model_folder': [None],#['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
             "mimic_cxr_target": [None],  # ]'pleural_effusion'],
             "first_n": [None],
         }
     )
 
+    data_model_params = [
+        # {
+        #     "dataset": "cifar10",  # , 'mnist', 'fashionmnist', 'svhn'],
+        #     "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
+        #     #['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
+        # },
+        {
+            "dataset": "svhn",  # , 'mnist', 'fashionmnist', 'svhn'],
+            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/25/',
+        },
+        {
+            "dataset": "mnist",  # , 'mnist', 'fashionmnist', 'svhn'],
+            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/26/',
+        },
+        {
+            "dataset": "fashionmnist",  # , '', 'fashionmnist', 'svhn'],
+            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/27/',
+        },
+
+
+    ]
+
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [100],
+            "n_epochs": [3],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -87,7 +104,7 @@ def get_grid_param_list():
             "scale_dists_loss_by_n_vals": [False],
             "conv_grad_name": ["loop"],  # loop backpack
             "dist_threshold": [0.05, 0.1, 0.2, 0.3, 0.4,0.5],  # ],#0.05,
-            "dist_margin":  [1e-3],#0.1
+            "dist_margin":  [1e-5],#0.1
             "pretrain_clf_epochs": [0],
             "detach_bpd_factors": [True],
             "frozen_clf": [False],
@@ -183,7 +200,7 @@ def get_grid_param_list():
             ],  # /home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th
             "soft_clamp_0_1": [True],
             "unet_use_bias": [True],
-            "encoder_clip_eps": [1e-1],
+            "encoder_clip_eps": [0.1],
         }
     )
 
@@ -314,6 +331,7 @@ def get_grid_param_list():
             model_params,
             optim_params,
             data_params,
+            data_model_params,
             quantize_params,
             noise_params,
             preproc_params,

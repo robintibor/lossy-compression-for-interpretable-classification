@@ -38,14 +38,14 @@ def get_grid_param_list():
         'n_epochs': [100],
         'adaptive_gradient_clipping': [False],
         'optim_type': ['adamw'],
-        'lr': [1e-3,3e-4],#[1e-1,5e-2,1e-2,5e-3],
+        'lr': [5e-3,],#[1e-1,5e-2,1e-2,5e-3,3e-4],
         'weight_decay': [1e-5],
     })
 
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['stripes'],
+        "dataset": ['imagenet32'],
     })
 
     random_params= dictlistprod({
@@ -55,7 +55,7 @@ def get_grid_param_list():
     model_params = dictlistprod({
         'model_name': ['wide_nf_net', ],#False
         'depth': [16],
-        'width': [2],
+        'width': [2],#2
         'dropout': [0.3],
         'save_model': [True],
         'activation': ["shifted_softplus_1", ],
