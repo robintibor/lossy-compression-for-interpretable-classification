@@ -214,7 +214,7 @@ def get_dataset(
 
     elif (dataset == "FashionMNIST") or (dataset == "FASHIONMNIST"):
         channel = 3
-        im_size = (28, 28)
+        im_size = (32, 32)
         num_classes = 10
         if not standardize:
             mean = [0]
