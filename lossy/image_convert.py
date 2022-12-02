@@ -5,7 +5,16 @@ from lossy.util import soft_clip, inverse_sigmoid
 
 
 def soft_clamp_to_0_1(x):
-    return x - (x - x.clamp(0,1)).detach()
+    return soft_clamp(x,0,1)
+
+
+def soft_clamp(x, a_min, a_max):
+    wanted_x = x.clamp(a_min,a_max)
+    # apply twice for numerical stability
+    x = x - (x - wanted_x).detach()
+    x = x - (x - wanted_x).detach()
+    return x
+    
 
 
 def quantize_data(x):
