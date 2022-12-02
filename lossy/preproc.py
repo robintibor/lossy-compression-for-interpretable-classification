@@ -172,6 +172,7 @@ def get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_pre
     if preproc_name in [
         "glow_with_resnet",
         "glow_with_pure_resnet",
+        "res_glow_with_pure_resnet",
     ]:
         for m in preproc.decoder.modules():
             if hasattr(m, 'modifier'):
@@ -179,6 +180,9 @@ def get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_pre
                     m.modifier.sigmoid_or_exp_scale,
                     m.modifier.add_first,
                     encoder_clip_eps)
+    if preproc_name == "res_glow_with_pure_resnet":
+        # Let's make sure glow used in encoder and decoder is same
+        preproc.encoder.glow[0] = preproc.decoder
 
     if preproc_name in [
         "glow",
@@ -192,10 +196,10 @@ def get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_pre
     preproc_post = nn.Sequential()
     if quantize_after_simplifier:
         preproc_post.add_module("quantize", Expression(quantize_data))
-    if noise_after_simplifier:
-        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
     if soft_clamp_0_1:
         preproc_post.add_module("soft_clamp_to_0_1", Expression(soft_clamp_to_0_1))
+    if noise_after_simplifier:
+        preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
     preproc = nn.Sequential(preproc, preproc_post)
     preproc.eval()
     return preproc
