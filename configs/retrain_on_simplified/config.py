@@ -68,17 +68,18 @@ def get_grid_param_list():
     df = df[df.debug == False]
     df = df[df.finished == True]
 
-    df = df[(df.detach_bpd_factors == True) & (df.n_epochs == 100) ]
 
-
+    df = df[
+        (df.soft_clamp_0_1 != '-') &
+        (df.n_epochs == 100) &
+        (df.frozen_clf != True) &
+        (df.preproc_name == 'res_glow_with_pure_resnet')]
     #df = df[df.activation == "shifted_softplus_1"]
 
 
     exp_ids = df.index
     saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
                          for exp_id in exp_ids]
-
-    #saved_exp_folders = ['/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step-simclr/39/']
 
 
     exp_params = dictlistprod({
@@ -105,6 +106,7 @@ def get_grid_param_list():
         {
             'save_models': [True],
             "with_batchnorm": [False],
+            "use_saved_clf_model_folder": [False],
         }
     )
     optim_params = dictlistprod(
@@ -161,6 +163,7 @@ def run(
     blur_sigma,
     jpg_quality,
     simclr_loss_factor,
+    use_saved_clf_model_folder,
 ):
     if debug:
         n_epochs = 3

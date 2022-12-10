@@ -40,6 +40,7 @@ def run_exp(
     norm,
     debug,
     output_dir,
+    mimic_cxr_target,
 ):
     assert optim_type in ['sgd', 'adamw', 'sam']
     hparams = {k: v for k, v in locals().items() if v is not None}
@@ -69,6 +70,7 @@ def run_exp(
         batch_size=batch_size,
         eval_batch_size=512,
         split_test_off_train=split_test_off_train,
+        mimic_cxr_target=mimic_cxr_target,
     )
     if dataset in ['cifar10', 'cifar100', 'stripes', 'imagenet32']:
         # but won't be applied for stripes actually atm
@@ -89,7 +91,7 @@ def run_exp(
             ]
         )
     else:
-        assert dataset in ['mnist', 'fashionmnist',]
+        assert dataset in ['mnist', 'fashionmnist', "mimic-cxr"]
         transform_train = transforms.Compose(
             [
                 transforms.Resize(
@@ -110,7 +112,7 @@ def run_exp(
             ]
         )
     else:
-        assert dataset in ['mnist', 'fashionmnist',]
+        assert dataset in ['mnist', 'fashionmnist', "mimic-cxr"]
         transform_test = transforms.Compose(
             [
                 transforms.Resize(

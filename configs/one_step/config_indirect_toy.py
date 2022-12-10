@@ -42,23 +42,24 @@ def get_grid_param_list():
 
     train_params = dictlistprod(
         {
-            "separate_orig_clf": [False],
-            "dist_name": ["normed_sse"],#"normed_sse_detached_norm", 
-            "train_clf_on_dist_loss": [True],
-            "train_clf_on_orig_simultaneously": [True],
-            "orig_loss_weight": [20],
+            "separate_orig_clf": [True],
+            "dist_name": ["normed_sse",],#"cosine_distance"], #""
+            "train_clf_on_dist_loss": [False],
+            "train_clf_on_orig_simultaneously": [False],
+            "orig_loss_weight": [0],
             "stop_clf_grad_through_simple": [False],
-            "simple_clf_loss_weight": [1,],
-            "n_epochs": [100],
-            # have a try
-            #"dist_threshold": [1],
+            "simple_clf_loss_weight": [0,],
+            "lr_clf": [3e-4],
+            "n_epochs": [10],
+            #"dist_threshold": [0.5],
         })
-    data_model_params = [
-        {
-            "dataset": "cifar10",  # , 'mnist', 'fashionmnist', 'svhn'],
-            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
-            #['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
-        },]
+
+    data_model_params = dictlistprod({
+        #"dataset": ["mnist_fashion", "stripes", "mnist_cifar", "mnist_uniform",],
+        "dataset": ["stripes"],
+        "saved_model_folder": [None],
+        "stripes_factor": [0.15],
+    })
 
     grid_params = product_of_list_of_lists_of_dicts(
         [

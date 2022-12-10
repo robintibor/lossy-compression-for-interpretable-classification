@@ -26,7 +26,7 @@ from lossy.modules import Expression
 def get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_preproc,
                      merge_weight_clf_chans, unet_use_bias, quantize_after_simplifier,
                      noise_after_simplifier, soft_clamp_0_1,
-                     X
+                     X, greyscale,
                      ):
     def to_plus_minus_one(x):
         return (x * 2) - 1
@@ -198,11 +198,18 @@ def get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_pre
         preproc_post.add_module("quantize", Expression(quantize_data))
     if soft_clamp_0_1:
         preproc_post.add_module("soft_clamp_to_0_1", Expression(soft_clamp_to_0_1))
+    if greyscale:
+        preproc_post.add_module("to_greyscale", Expression(to_greyscale))
     if noise_after_simplifier:
         preproc_post.add_module("add_glow_noise", Expression(add_glow_noise_to_0_1))
     preproc = nn.Sequential(preproc, preproc_post)
     preproc.eval()
     return preproc
+
+
+def to_greyscale(x):
+    x_meaned = th.mean(x, dim=1, keepdim=True)
+    return th.cat((x_meaned, x_meaned, x_meaned), dim=1)
 
 
 def get_preprocessor_from_folder(saved_exp_folder, X=None, glow="reload"):

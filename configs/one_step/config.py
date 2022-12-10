@@ -43,27 +43,11 @@ def get_grid_param_list():
         }
     ]
 
-    # data_params = [
-    #     {
-    #         'dataset': 'mnist',
-    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/20/'
-    #     },
-    #     {
-    #         'dataset': 'fashionmnist',
-    #         'saved_model_folder': '/home/schirrmr/data/exps/lossy/mnist-wide-nfnets/21/'
-    #
-    #     },
-    #     {
-    #         'dataset': 'cifar10',
-    #         #'saved_model_folder': '/home/schirrmr/data/exps/lossy/cifar10-wide-nfnets/114/'
-    #          'saved_model_folder': '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/'
-    #     }
-    # ]
-
     data_params = dictlistprod(
-        {  # "cifar10", "mnist", "fashionmnist",
+        {  
             "mimic_cxr_target": [None],  # ]'pleural_effusion'],
             "first_n": [None],
+            "stripes_factor": [0.3],
         }
     )
 
@@ -73,18 +57,18 @@ def get_grid_param_list():
         #     "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
         #     #['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
         # },
-        {
-            "dataset": "svhn",  # , 'mnist', 'fashionmnist', 'svhn'],
-            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/25/',
-        },
-        {
-            "dataset": "mnist",  # , 'mnist', 'fashionmnist', 'svhn'],
-            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/26/',
-        },
-        {
-            "dataset": "fashionmnist",  # , '', 'fashionmnist', 'svhn'],
-            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/27/',
-        },
+        # {
+        #     "dataset": "svhn",  # , 'mnist', 'fashionmnist', 'svhn'],
+        #     "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/25/',
+        # },
+        # {
+        #     "dataset": "mnist",  # , 'mnist', 'fashionmnist', 'svhn'],
+        #     "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/26/',
+        # },
+        # {
+        #     "dataset": "fashionmnist",  # , '', 'fashionmnist', 'svhn'],
+        #     "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/nf-net-stripes/27/',
+        # },
 
 
     ]
@@ -92,7 +76,7 @@ def get_grid_param_list():
     train_params = dictlistprod(
         {
             # "n_epochs": [2],
-            "n_epochs": [3],
+            "n_epochs": [100],
             "batch_size": [32],
             "train_orig": [False],
             "train_simclr_orig": [False],
@@ -109,6 +93,9 @@ def get_grid_param_list():
             "detach_bpd_factors": [True],
             "frozen_clf": [False],
             "first_batch_only": [False],
+            "simple_clf_loss_threshold": [None],
+            "threshold_simple_class_correct": [True],
+            "bound_grad_norm_factor": [None],
         }
     )
 
@@ -415,6 +402,10 @@ def run(
     encoder_clip_eps,
     clip_grad_percentile,
     dist_margin,
+    stripes_factor,
+    simple_clf_loss_threshold,
+    threshold_simple_class_correct,
+    bound_grad_norm_factor,
 ):
     if debug:
         n_epochs = 3

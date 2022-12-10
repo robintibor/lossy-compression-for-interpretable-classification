@@ -45,7 +45,8 @@ def get_grid_param_list():
     data_params = dictlistprod({
         'split_test_off_train': [False],
         'first_n': [None],
-        "dataset": ['imagenet32'],
+        "dataset": ['mimic-cxr'],
+        "mimic_cxr_target" : ["pleural_effusion"]
     })
 
     random_params= dictlistprod({
@@ -101,7 +102,8 @@ def run(
         dataset,
         pooling,
         norm,
-        debug,):
+        debug,
+        mimic_cxr_target,):
     if debug:
         n_epochs = 3
         first_n = 1024

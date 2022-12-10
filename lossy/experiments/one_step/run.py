@@ -371,6 +371,10 @@ def run_exp(
     encoder_clip_eps,
     clip_grad_percentile,
     dist_margin,
+    stripes_factor,
+    simple_clf_loss_threshold,
+    threshold_simple_class_correct,
+    bound_grad_norm_factor,
 ):
     assert model_name in [
         "wide_nf_net",
@@ -425,7 +429,7 @@ def run_exp(
         split_test_off_train=split_test_off_train,
         first_n=first_n,
         mimic_cxr_target=mimic_cxr_target,
-        stripes_factor=0.3,
+        stripes_factor=stripes_factor,
         eval_batch_size=eval_batch_size,
     )
 
@@ -503,6 +507,7 @@ def run_exp(
                 "stripes",
                 "mnist_fashion",
                 "mnist_cifar",
+                "mnist_uniform",
                 "stripes_imagenet",
             ]
         aug_m.add_module("noise", Expression(lambda x: x + noise))
@@ -525,8 +530,8 @@ def run_exp(
     if separate_orig_clf:
         orig_clf, opt_orig_clf = deepcopy((clf, opt_clf))
         # problems if done before deepcopy
-        opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 400)
-    opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 400)
+        opt_orig_clf = PercentileGradClip(opt_orig_clf, clip_grad_percentile, 400, bound_grad_norm_factor)
+    opt_clf = PercentileGradClip(opt_clf, clip_grad_percentile, 400, bound_grad_norm_factor)
 
     if data_parallel:
         clf = nn.DataParallel(clf)
@@ -562,6 +567,12 @@ def run_exp(
     log.info("Create preprocessor...")
     if not first_batch_only:
         X = None
+    if dataset in ['mimic_cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
+        greyscale = True
+    else:
+        assert dataset in ["svhn", "cifar10", "cifar100", "imagenet", "imagenet32", "stripes",
+                           "mnist_uniform", "mnist_cifar"]
+        greyscale = False
     preproc = get_preprocessor(
         preproc_name=preproc_name,
         glow=glow,
@@ -572,7 +583,8 @@ def run_exp(
         quantize_after_simplifier=quantize_after_simplifier,
         noise_after_simplifier=noise_after_simplifier,
         soft_clamp_0_1=soft_clamp_0_1,
-        X=X)
+        X=X,
+        greyscale=greyscale)
 
     beta_preproc = (0.5, 0.99)
 
@@ -582,7 +594,7 @@ def run_exp(
         weight_decay=weight_decay_preproc,
         betas=beta_preproc,
     )
-    opt_preproc = PercentileGradClip(opt_preproc, clip_grad_percentile, 400)
+    opt_preproc = PercentileGradClip(opt_preproc, clip_grad_percentile, 400, bound_grad_norm_factor)
     if data_parallel:
         preproc = nn.DataParallel(preproc)
 
@@ -911,6 +923,17 @@ def run_exp(
                     ).detach()
                 else:
                     bpd_factors = th.ones_like(X[:, 0, 0, 0])
+                if simple_clf_loss_threshold is not None:
+                    simple_clf_losses = th.nn.functional.cross_entropy(
+                        simple_acts_grads[wanted_modules[-1]]["out_act"][0], y,
+                        reduction='none',
+                    ).detach()
+                    assert len(simple_clf_losses) == len(bpd_factors)
+                    bpd_factors = bpd_factors * (simple_clf_losses < simple_clf_loss_threshold)
+                if threshold_simple_class_correct:
+                    simple_out = simple_acts_grads[wanted_modules[-1]]["out_act"][0].detach()
+                    correct_mask = simple_out.argmax(dim=1) == y
+                    bpd_factors = bpd_factors * correct_mask
             else:
                 assert loss_name == "one_step"
                 with higher.innerloop_ctx(clf, opt_clf, copy_initial_weights=True) as (

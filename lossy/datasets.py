@@ -150,7 +150,8 @@ def get_dataset(
         "mnist_fashion",
         "stripes",
         "mnist_cifar",
-        "stripes_imagenet"
+        "stripes_imagenet",
+        "mnist_uniform",
     ]:
         from lossy.toy_datasets import load_dataset
         (

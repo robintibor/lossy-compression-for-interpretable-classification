@@ -68,6 +68,22 @@ class StripesSet(th.utils.data.Dataset):
         return len(self.orig_set)
 
 
+class AddUniformNoise(th.utils.data.Dataset):
+    def __init__(self, orig_set, add_noise_factor=0.5):
+        self.orig_set = orig_set
+        self.add_noise_factor = add_noise_factor
+
+    def __getitem__(self, index):
+        x_orig, y_orig = self.orig_set[index]
+        uniform_noise = th.rand_like(x_orig)
+        uniform_noise = uniform_noise * x_orig
+        merged_x = uniform_noise * self.add_noise_factor + x_orig * (1 - self.add_noise_factor)
+        return merged_x, y_orig
+
+    def __len__(self):
+        return len(self.orig_set)
+
+
 def load_dataset(
     dataset_name,
     data_path,
@@ -81,7 +97,8 @@ def load_dataset(
         "mnist_fashion",
         "stripes",
         "mnist_cifar",
-        "stripes_imagenet"
+        "stripes_imagenet",
+        "mnist_uniform",
     ]
 
     from lossy.datasets import get_train_test_datasets
@@ -113,6 +130,13 @@ def load_dataset(
         else:
             dst_train = MixedSet(train_fashion, train_mnist, merge_x_fn, merge_y_fn)
             dst_test = MixedSet(test_fashion, test_mnist, merge_x_fn, merge_y_fn)
+    elif dataset_name == "mnist_uniform":
+        train_mnist, test_mnist = get_train_test_datasets(
+            "MNIST", data_path, standardize=False
+        )
+        num_classes = 10
+        dst_train = AddUniformNoise(train_mnist, add_noise_factor=0.5)
+        dst_test = AddUniformNoise(test_mnist, add_noise_factor=0.5)
     elif dataset_name == "stripes":
 
         train_cifar, test_cifar = get_train_test_datasets(

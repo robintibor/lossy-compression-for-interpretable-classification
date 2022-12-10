@@ -12,15 +12,16 @@ log = logging.getLogger(__name__)
 
 
 class PercentileGradClip(Optimizer):
-    def __init__(self, base_optim, percentile, n_history):
+    def __init__(self, base_optim, percentile, n_history, cut_off_factor):
         # mostly forward calls to base optim
         # https://stackoverflow.com/a/1445289
         self.__dict__ = base_optim.__dict__
         self.base_optim = base_optim
         self.percentile = percentile
         self.n_history = n_history
+        self.cut_off_factor = cut_off_factor
         self.grad_norms = []
-        
+
 
     def step(self):
         with th.no_grad():  # not sure if necessary
@@ -30,9 +31,12 @@ class PercentileGradClip(Optimizer):
             self.grad_norms.append(grad_norm)
             if len(self.grad_norms) > self.n_history:
                 self.grad_norms = self.grad_norms[1:]
-            max_grad_norm = np.percentile(self.grad_norms, self.percentile,
-                                         interpolation='lower')
+            max_grad_norm = np.percentile(
+                self.grad_norms, self.percentile, interpolation='lower')
 
+            if (self.cut_off_factor is not None) and (
+                    grad_norm > (max_grad_norm * self.cut_off_factor)):
+                return # skip this grad step
             if grad_norm > max_grad_norm:
                 factor = max_grad_norm / grad_norm
                 for g in self.base_optim.param_groups:
@@ -40,8 +44,8 @@ class PercentileGradClip(Optimizer):
                         p.grad.data.multiply_(factor)
 
         self.base_optim.step()
-        
-        
+
+
 def grads_all_finite(optimizer):
     for g in optimizer.param_groups:
         for p in g['params']:
