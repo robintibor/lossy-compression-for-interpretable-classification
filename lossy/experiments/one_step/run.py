@@ -960,8 +960,13 @@ def run_exp(
                 bpd_factors = (
                         (1 / threshold) * (threshold - f_orig_loss_per_ex).clamp(0, 1)
                 ).detach()
-            bpd = get_bpd(gen, simple_X)
-            bpd_loss = th.mean(bpd * bpd_factors)
+
+            # only compute bpd for those where it will be applied
+            bpd_valid_mask = bpd_factors > 0
+            bpd = get_bpd(gen, simple_X[bpd_valid_mask])
+            # still keep overall bpd weight same as before,
+            # so compute mean over all, also those where bpd was not computed
+            bpd_loss = th.sum(bpd * bpd_factors[bpd_valid_mask]) / len(simple_X)
             im_loss = weighted_sum(
                 1,
                 1,
