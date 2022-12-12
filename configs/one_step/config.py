@@ -45,7 +45,7 @@ def get_grid_param_list():
 
     data_params = dictlistprod(
         {  
-            "mimic_cxr_target": [None],  # ]'pleural_effusion'],
+            "mimic_cxr_target": ['pleural_effusion'],  # ]'pleural_effusion'],
             "first_n": [None],
             "stripes_factor": [0.3],
         }
@@ -96,6 +96,7 @@ def get_grid_param_list():
             "simple_clf_loss_threshold": [None],
             "threshold_simple_class_correct": [True],
             "bound_grad_norm_factor": [None],
+            "skip_unneeded_bpd_computations": [True],
         }
     )
 
@@ -188,6 +189,7 @@ def get_grid_param_list():
             "soft_clamp_0_1": [True],
             "unet_use_bias": [True],
             "encoder_clip_eps": [0.1],
+            #"preproc_glow_path": [None, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
         }
     )
 
@@ -406,6 +408,8 @@ def run(
     simple_clf_loss_threshold,
     threshold_simple_class_correct,
     bound_grad_norm_factor,
+    skip_unneeded_bpd_computations,
+    preproc_glow_path,
 ):
     if debug:
         n_epochs = 3

@@ -375,6 +375,8 @@ def run_exp(
     simple_clf_loss_threshold,
     threshold_simple_class_correct,
     bound_grad_norm_factor,
+    skip_unneeded_bpd_computations,
+    preproc_glow_path,
 ):
     assert model_name in [
         "wide_nf_net",
@@ -385,6 +387,7 @@ def run_exp(
         "linear",
         "torchvision_resnet18",
     ]
+    assert skip_unneeded_bpd_computations
     if saved_model_folder is not None:
         assert model_name in ["wide_nf_net", "ConvNet"]
     if frozen_clf:
@@ -567,15 +570,21 @@ def run_exp(
     log.info("Create preprocessor...")
     if not first_batch_only:
         X = None
-    if dataset in ['mimic_cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
+    if dataset in ['mimic-cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
         greyscale = True
     else:
         assert dataset in ["svhn", "cifar10", "cifar100", "imagenet", "imagenet32", "stripes",
                            "mnist_uniform", "mnist_cifar"]
         greyscale = False
+
+    if preproc_glow_path is None:
+        preproc_glow = glow
+    else:
+        preproc_glow = load_glow(preproc_glow_path)
+
     preproc = get_preprocessor(
         preproc_name=preproc_name,
-        glow=glow,
+        glow=preproc_glow,
         encoder_clip_eps=encoder_clip_eps,
         cat_clf_chans_for_preproc=cat_clf_chans_for_preproc,
         merge_weight_clf_chans=merge_weight_clf_chans,
@@ -962,11 +971,17 @@ def run_exp(
                 ).detach()
 
             # only compute bpd for those where it will be applied
+            assert skip_unneeded_bpd_computations  # only for documentation reasons
             bpd_valid_mask = bpd_factors > 0
-            bpd = get_bpd(gen, simple_X[bpd_valid_mask])
-            # still keep overall bpd weight same as before,
-            # so compute mean over all, also those where bpd was not computed
-            bpd_loss = th.sum(bpd * bpd_factors[bpd_valid_mask]) / len(simple_X)
+
+            if sum(bpd_valid_mask) > 0:
+                bpd = get_bpd(gen, simple_X[bpd_valid_mask])
+                # still keep overall bpd weight same as before,
+                # so compute mean over all, also those where bpd was not computed
+                bpd_loss = th.sum(bpd * bpd_factors[bpd_valid_mask]) / len(simple_X)
+            else:
+                bpd = th.zeros_like(X[:,0,0,0]) # just dummy for later if check
+                bpd_loss = th.zeros_like(f_simple_loss)
             im_loss = weighted_sum(
                 1,
                 1,

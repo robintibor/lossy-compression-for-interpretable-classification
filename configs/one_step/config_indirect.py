@@ -53,8 +53,14 @@ def get_grid_param_list():
     })
     
     data_model_params = dictlistprod({
-        "dataset":  ['cifar10', 'mnist', 'fashionmnist', 'svhn'],
+        "mimic_cxr_target": ["age"],
+        "dataset":  ['mimic-cxr', ],#'mnist', 'fashionmnist', 'svhn'#'cifar1ß'
         "saved_model_folder": [None],
+        "preproc_glow_path": [None],#, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
+    }) +dictlistprod({
+        # "dataset":  ['fashionmnist'],#'mnist', 'fashionmnist', 'svhn'#'mnist',
+        # "saved_model_folder": [None],
+        # "preproc_glow_path": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
     })
 
     grid_params = product_of_list_of_lists_of_dicts(

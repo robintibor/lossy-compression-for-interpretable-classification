@@ -229,11 +229,22 @@ def get_preprocessor_from_folder(saved_exp_folder, X=None, glow="reload"):
         glow_model_path_32x32 = config.get(
             "glow_model_path_32x32",
             "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th")
-        glow = load_glow(glow_model_path_32x32)
+        preproc_glow_path = config['preproc_glow_path']# could change to get ,None later
+        if preproc_glow_path is None:
+            preproc_glow_path = glow_model_path_32x32
+        glow = load_glow(preproc_glow_path)
+
+    if config['dataset'] in ['mimic_cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
+        greyscale = True
+    else:
+        assert config['dataset'] in ["svhn", "cifar10", "cifar100", "imagenet", "imagenet32", "stripes",
+                           "mnist_uniform", "mnist_cifar"]
+        greyscale = False
+
 
     preproc = get_preprocessor(preproc_name, glow, encoder_clip_eps, cat_clf_chans_for_preproc,
                      merge_weight_clf_chans, unet_use_bias, quantize_after_simplifier,
-                     noise_after_simplifier, soft_clamp_0_1, X)
+                     noise_after_simplifier, soft_clamp_0_1, X, greyscale=greyscale)
     preproc.load_state_dict(
         th.load(os.path.join(saved_exp_folder, "preproc_state_dict.th"))
     )

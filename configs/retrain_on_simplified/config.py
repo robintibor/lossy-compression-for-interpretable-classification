@@ -70,11 +70,9 @@ def get_grid_param_list():
 
 
     df = df[
-        (df.soft_clamp_0_1 != '-') &
+        (df.finished == True) &
         (df.n_epochs == 100) &
-        (df.frozen_clf != True) &
-        (df.preproc_name == 'res_glow_with_pure_resnet')]
-    #df = df[df.activation == "shifted_softplus_1"]
+        (df.skip_unneeded_bpd_computations == True)]
 
 
     exp_ids = df.index

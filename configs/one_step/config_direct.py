@@ -53,12 +53,16 @@ def get_grid_param_list():
             # have a try
             #"dist_threshold": [1],
         })
-    data_model_params = [
-        {
-            "dataset": "cifar10",  # , 'mnist', 'fashionmnist', 'svhn'],
-            "saved_model_folder": '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/cifar10-wide-nfnets-shifted-softplus/23/',
-            #['/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/simple-convnets/2/'],  # [None],
-        },]
+
+    data_model_params = dictlistprod({
+        "dataset":  ['cifar10', ],#'mnist', 'fashionmnist', 'svhn'#'cifar1ß'
+        "saved_model_folder": [None],
+        "preproc_glow_path": [None],#, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
+    }) + dictlistprod({
+        # "dataset":  ['fashionmnist'],#'mnist', 'fashionmnist', 'svhn'#'mnist',
+        # "saved_model_folder": [None],
+        # "preproc_glow_path": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
+    })
 
     grid_params = product_of_list_of_lists_of_dicts(
         [
