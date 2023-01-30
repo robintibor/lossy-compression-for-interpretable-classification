@@ -33,11 +33,13 @@ from lossy.activation_match import normed_sse
 from lossy.activation_match import normed_sse_detached_norm
 from lossy.activation_match import normed_sse_larger_detached_norm
 from lossy.activation_match import normed_sqrt_sse
+from lossy.activation_match import out_act
 from lossy.activation_match import refed
 from lossy.activation_match import sse_loss
 from lossy.activation_match import unfolded_grads
 from lossy.affine import AffineOnChans
 from lossy.augment import FixedAugment, TrivialAugmentPerImage
+from lossy.classifier import get_clf_and_optim
 from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.glow import load_glow
@@ -87,177 +89,6 @@ def restore_grads_from(params, fieldname):
 def save_grads_to(params, fieldname):
     for p in params:
         setattr(p, fieldname, p.grad.detach().clone())
-
-
-def get_clf_and_optim(
-    model_name,
-    num_classes,
-    normalize,
-    optim_type,
-    saved_model_folder,
-    depth,
-    widen_factor,
-    lr_clf,
-    weight_decay,
-    activation,
-    dataset,
-    norm_simple_convnet,
-    pooling,
-    im_size,
-    external_pretrained_clf,
-):
-    if model_name in [
-        "wide_nf_net",
-        "wide_bnorm_net",
-        "ConvNet",
-    ]:
-        dropout = 0.3
-        if saved_model_folder is not None:
-            saved_model_config = json.load(
-                open(os.path.join(saved_model_folder, "config.json"), "r")
-            )
-            assert (
-                saved_model_config.get("model_name", "wide_nf_net") == model_name
-            ), f"{model_name} given but trying to load {saved_model_config['model_name']}"
-            depth = saved_model_config["depth"]
-            if "widen_factor" in saved_model_config:
-                widen_factor = saved_model_config["widen_factor"]
-            else:
-                widen_factor = saved_model_config["width"]
-
-            dropout = saved_model_config.get("dropout", 0.3)
-            activation = saved_model_config.get(
-                "activation", "relu"
-            )  # default was relu
-            norm_simple_convnet = saved_model_config.get(
-                "norm_simple_convnet", norm_simple_convnet
-            )
-            pooling = saved_model_config.get("pooling", pooling)
-            assert saved_model_config.get("dataset", "cifar10") == dataset
-        if model_name == "wide_nf_net":
-            from lossy.wide_nf_net import conv_init, Wide_NFResNet
-
-            nf_net = Wide_NFResNet(
-                depth, widen_factor, dropout, num_classes, activation=activation
-            ).cuda()
-            nf_net.apply(conv_init)
-            model = nf_net
-        elif model_name == "wide_bnorm_net":
-            assert activation == "relu"
-            # activation = "relu"  # overwrite for wide resnet for now
-            from lossy.wide_resnet import Wide_ResNet, conv_init
-
-            model = Wide_ResNet(
-                depth, widen_factor, dropout, num_classes, activation=activation
-            ).cuda()
-            model.apply(conv_init)
-        elif model_name == "ConvNet":
-            model = ConvNet(
-                3,
-                num_classes,
-                widen_factor,
-                depth,
-                activation,
-                norm_simple_convnet,
-                pooling,
-                im_size,
-            ).cuda()
-        else:
-            assert False
-    elif model_name == "resnet18":
-        from lossy.resnet import resnet18
-
-        model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
-    elif model_name == "torchvision_resnet18":
-        from torchvision.models import resnet18
-
-        model = resnet18(num_classes=num_classes, pretrained=external_pretrained_clf)
-    # What is this? probably old and deletable?
-    elif model_name == "conv_net":
-        model = ConvNet(
-            channel=3,
-            num_classes=num_classes,
-            net_width=64,
-            net_depth=3,
-            net_act="shifted_softplus",
-            net_norm="batchnorm",
-            net_pooling="avgpooling",
-            im_size=(32, 32),
-        )
-    elif model_name == "linear":
-        model = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(3072, num_classes),
-        )
-    else:
-        assert False
-
-    clf = nn.Sequential(normalize, model)
-    clf = clf.cuda()
-
-    if saved_model_folder is not None:
-        assert model_name in [
-            "wide_nf_net",
-            "wide_bnorm_net",
-            "ConvNet",
-        ]
-        if "lr_preproc" in saved_model_config:
-            try:
-                # used to have nf_net in name later removed that
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
-                )
-            except FileNotFoundError:
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "clf_state_dict.th")
-                )
-            # normalization included in model in SimpleBits training
-            clf.load_state_dict(saved_clf_state_dict)
-        else:
-            try:
-                # used to have nf_net in name later removed that
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "nf_net_state_dict.th")
-                )
-            except FileNotFoundError:
-                saved_clf_state_dict = th.load(
-                    os.path.join(saved_model_folder, "state_dict.th")
-                )
-            # normalization was not included in model in regular training
-            clf[1].load_state_dict(saved_clf_state_dict)
-
-    log.info("Create optimizers...")
-    params_with_weight_decay = []
-    params_without_weight_decay = []
-    for name, param in clf.named_parameters():
-        if "weight" in name or "gain" in name:
-            params_with_weight_decay.append(param)
-        else:
-            assert "bias" in name
-            params_without_weight_decay.append(param)
-
-    beta_clf = (0.9, 0.995)
-
-    if optim_type == "adam":
-        opt_clf = torch.optim.Adam(
-            [
-                dict(params=params_with_weight_decay, weight_decay=weight_decay),
-                dict(params=params_without_weight_decay, weight_decay=0),
-            ],
-            lr=lr_clf,
-            betas=beta_clf,
-        )
-    else:
-        assert optim_type == "adamw"
-        opt_clf = torch.optim.AdamW(
-            [
-                dict(params=params_with_weight_decay, weight_decay=weight_decay),
-                dict(params=params_without_weight_decay, weight_decay=0),
-            ],
-            lr=lr_clf,
-            betas=beta_clf,
-        )
-    return clf, opt_clf
 
 
 def adjust_betas_of_clf(clf, trainloader, get_aug_m):
@@ -618,15 +449,17 @@ def run_exp(
             opt_clf.step()
             opt_clf.zero_grad(set_to_none=True)
 
-    if loss_name in ["grad_act_match", "gradparam_param"]:
+    if loss_name in ["grad_act_match", "gradparam_param", "act_match"]:
         use_parameter_counts = False  # loss_name == "grad_act_match"
         val_fn = {
             "grad_act_match": grad_in_act_act,
+            "act_match": out_act,
             "gradparam_param": partial(gradparam_param, conv_grad_fn=conv_grad_name),
         }[loss_name]
         if grad_from_orig:
             val_to_ref = {
                 "grad_act_match": "in_grad",
+                "act_match": "in_grad", # irrelevant
                 "gradparam_param": "out_grad",
             }[loss_name]
             val_fn = refed(val_fn, val_to_ref)
@@ -649,7 +482,7 @@ def run_exp(
         dist_fn = partial(cos_dist_unfolded_grads, eps=1e-10)
         flatten_before_dist = False
 
-    if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]:
+    if loss_name in ["grad_act_match", "unfolded_grad_match", "gradparam_param", "act_match"]:
         if separate_orig_clf:
             clf_for_comparisons = orig_clf
         else:
@@ -742,6 +575,7 @@ def run_exp(
                 "grad_act_match",
                 "unfolded_grad_match",
                 "gradparam_param",
+                "act_match"
             ]:
                 loss_fn = lambda o: th.nn.functional.cross_entropy(
                     o, y, reduction="none"
@@ -1023,7 +857,7 @@ def run_exp(
 
             if (
                     loss_name
-                    in ["grad_act_match", "unfolded_grad_match", "gradparam_param"]
+                    in ["grad_act_match", "unfolded_grad_match", "gradparam_param", "act_match"]
                     and (not separate_orig_clf)
                     and (loss_name == "normal_crossent")
                     and (not train_clf_on_orig_simultaneously)

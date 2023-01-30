@@ -50,17 +50,20 @@ def get_grid_param_list():
             "simple_clf_loss_weight": [0,],
             "lr_clf": [3e-4],
             "n_epochs": [100],
+            "dist_threshold": [0.6, 0.7],#[0.05,0.1,0.2,0.3,0.4,0.5],
+            #"bpd_weight": [-0.5],
+            #"loss_name": ["act_match"],
     })
     
     data_model_params = dictlistprod({
-        "mimic_cxr_target": ["age"],
-        "dataset":  ['mimic-cxr', ],#'mnist', 'fashionmnist', 'svhn'#'cifar1ß'
-        "saved_model_folder": [None],
-        "preproc_glow_path": [None],#, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
-    }) +dictlistprod({
-        # "dataset":  ['fashionmnist'],#'mnist', 'fashionmnist', 'svhn'#'mnist',
+        # "mimic_cxr_target": ["age"],
+        # "dataset":  ['mimic-cxr', ],#'mnist', 'fashionmnist', 'svhn'#'cifar1ß'
         # "saved_model_folder": [None],
-        # "preproc_glow_path": ["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
+        # "preproc_glow_path": [None],#, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
+    }) + dictlistprod({
+        "dataset":  ['cifar10'],#'mnist', 'fashionmnist', 'svhn'#'mnist',
+        "saved_model_folder": [None],
+        "preproc_glow_path": [None], #["/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
     })
 
     grid_params = product_of_list_of_lists_of_dicts(

@@ -46,7 +46,7 @@ def get_grid_param_list():
         'split_test_off_train': [False],
         'first_n': [None],
         "dataset": ['mimic-cxr'],
-        "mimic_cxr_target" : ["pleural_effusion"]
+        "mimic_cxr_target": ["pleural_effusion"]
     })
 
     random_params= dictlistprod({

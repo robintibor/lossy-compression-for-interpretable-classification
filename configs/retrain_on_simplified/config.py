@@ -67,13 +67,16 @@ def get_grid_param_list():
     df = load_data_frame(parent_exp_folder)
     df = df[df.debug == False]
     df = df[df.finished == True]
-
+    df = df.fillna('-')
 
     df = df[
-        (df.finished == True) &
         (df.n_epochs == 100) &
-        (df.skip_unneeded_bpd_computations == True)]
-
+        (df.skip_unneeded_bpd_computations == True) &
+        (df.dataset == 'cifar10') &
+        (df.bpd_weight == 4) &
+        (df.separate_orig_clf == True) &
+        (df.preproc_glow_path == "-")
+        ]
 
     exp_ids = df.index
     saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))

@@ -185,7 +185,7 @@ def get_dataset(
             testloader,
         )
     assert not standardize
-    if dataset == "MNIST":
+    if dataset.upper() == "MNIST":
         channel = 3
         im_size = (32, 32)
         num_classes = 10
@@ -213,7 +213,7 @@ def get_dataset(
         )
         class_names = [str(c) for c in range(num_classes)]
 
-    elif (dataset == "FashionMNIST") or (dataset == "FASHIONMNIST"):
+    elif dataset.upper() == "FASHIONMNIST":
         channel = 3
         im_size = (32, 32)
         num_classes = 10
@@ -241,7 +241,7 @@ def get_dataset(
         )
         class_names = dst_train.classes
 
-    elif dataset == "SVHN":
+    elif dataset.upper() == "SVHN":
         channel = 3
         im_size = (32, 32)
         num_classes = 10
@@ -262,7 +262,7 @@ def get_dataset(
         )
         class_names = [str(c) for c in range(num_classes)]
 
-    elif dataset == "CIFAR10":
+    elif dataset.upper() == "CIFAR10":
         channel = 3
         im_size = (32, 32)
         num_classes = 10
@@ -282,7 +282,7 @@ def get_dataset(
             data_path, train=False, download=True, transform=transform
         )
         class_names = dst_train.classes
-    elif dataset == "CIFAR100":
+    elif dataset.upper() == "CIFAR100":
         channel = 3
         im_size = (32, 32)
         num_classes = 100
@@ -303,7 +303,7 @@ def get_dataset(
             data_path, train=False, download=True, transform=transform
         )
         class_names = dst_train.classes
-    elif dataset == "IMAGENET32":
+    elif dataset.upper() == "IMAGENET32":
         channel = 3
         im_size = (32, 32)
         num_classes = 1000
@@ -315,7 +315,7 @@ def get_dataset(
         dst_train = ImageNet32(imagenet_32_dir, train=True, transform=transform)
         dst_test = ImageNet32(imagenet_32_dir, train=False, transform=transform)
         class_names = dst_train.classes
-    elif dataset == "USPS":
+    elif dataset.upper() == "USPS":
         channel = 3
         im_size = (32, 32)
         num_classes = 10
@@ -336,7 +336,7 @@ def get_dataset(
             data_path, train=False, download=True, transform=transform
         )
         class_names = [str(c) for c in range(num_classes)]
-    elif dataset == "CELEBA":
+    elif dataset.upper() == "CELEBA":
         channel = 3
         im_size = (32, 32)
         num_classes = 40
@@ -363,7 +363,7 @@ def get_dataset(
             split="valid",
         )
         class_names = dst_train.attr_names
-    elif dataset == "MIMIC-CXR":
+    elif dataset.upper() == "MIMIC-CXR":
         mimic_folder = data_locations.mimic_cxr
         transform = transforms.Compose(
             [
@@ -391,7 +391,7 @@ def get_dataset(
         im_size = (32, 32)
         class_names = dst_train.classes
         num_classes = len(class_names)
-    elif dataset == 'IMAGENET':
+    elif dataset.upper() == 'IMAGENET':
 
         imagenet_root = data_locations.imagenet
 

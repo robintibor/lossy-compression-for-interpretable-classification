@@ -139,6 +139,7 @@ def run_exp(
     debug,
     hidden_channels,
     L,
+    flow_coupling,
 ):
 
     writer = SummaryWriter(output_dir)
@@ -188,7 +189,6 @@ def run_exp(
 
     K = 6
     flow_permutation = 'invconv'
-    flow_coupling = 'affine'
     LU_decomposed = True
     n_chans = 3
 

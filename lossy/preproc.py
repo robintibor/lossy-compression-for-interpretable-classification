@@ -234,7 +234,7 @@ def get_preprocessor_from_folder(saved_exp_folder, X=None, glow="reload"):
             preproc_glow_path = glow_model_path_32x32
         glow = load_glow(preproc_glow_path)
 
-    if config['dataset'] in ['mimic_cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
+    if config['dataset'] in ['mimic-cxr', 'mnist', 'fashionmnist', 'mnist_fashion',]:
         greyscale = True
     else:
         assert config['dataset'] in ["svhn", "cifar10", "cifar100", "imagenet", "imagenet32", "stripes",

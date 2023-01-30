@@ -67,6 +67,7 @@ def get_grid_param_list():
         'mimic_cxr_target': [None],
         #'dataset': ['cifar10'],#, 'mnist'],
         'saved_model_folder': [None],
+        'stripes_factor': [0.15],
     })
 
     train_params = dictlistprod(
@@ -136,7 +137,7 @@ def get_grid_param_list():
             "optim_type": [
                 "adamw",
             ],
-            "bpd_weight": [0.6,0.8],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
+            "bpd_weight": [0., 0.1, 0.2, 0.4, 0.5,],#[0., 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0],
             # ,0.6,1.0,1.4
         }
     )

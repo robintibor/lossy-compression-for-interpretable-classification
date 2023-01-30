@@ -2,7 +2,9 @@ import os
 
 os.sys.path.insert(0, "/home/schirrmr/code/utils/")
 os.sys.path.insert(0, "/home/schirrmr/code/lossy/")
-os.sys.path.insert(0, "/home/schirrmr/code/invertible-neurips/")
+os.sys.path.insert(0, "/home/schirrmr/code/nfnets/")
+# os.sys.path.insert(0, "/home/schirrmr/code/invertible-neurips/")
+os.sys.path.insert(0, "/home/schirrmr/code/cifar10-clf/")
 import time
 import logging
 
@@ -10,6 +12,7 @@ from hyperoptim.parse import (
     cartesian_dict_of_lists_product,
     product_of_list_of_lists_of_dicts,
 )
+
 import torch as th
 import torch.backends.cudnn as cudnn
 
@@ -29,8 +32,8 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/icml-rebuttal/large-res-glow/",
-                           #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/masklatent/",  # before rebuttal without "icml-"
+            # "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
 
@@ -40,40 +43,45 @@ def get_grid_param_list():
         }
     ]
 
-    random_params = dictlistprod(
+    data_params = dictlistprod(
         {
-            "np_th_seed": range(1),
-        }
-    )
-
-    model_params = dictlistprod(
-        {
-            "hidden_channels": [128,256],#,256],
-            "L": [3],#,4,5],
-            "flow_coupling": ["additive"],
-        }
-    )
-    optim_params = dictlistprod(
-        {
-            "weight_decay": [5e-5],
-            "lr": [5e-4],#5e-4,
+            "first_n": [None],
         }
     )
 
     train_params = dictlistprod(
         {
-            "n_epochs": [3],
+            # "n_epochs": [2],
+            "n_epochs": [100],
+        }
+    )
+
+
+    random_params = dictlistprod(
+        {
+            "np_th_seed": [0],
+        }
+    )
+
+
+    optim_params = dictlistprod(
+        {
+            "clip_grad_percentile": [10,80],
+            "bpd_weight": [
+                0.1,
+                0.5,
+            ],
         }
     )
 
     grid_params = product_of_list_of_lists_of_dicts(
         [
             save_params,
+            train_params,
             random_params,
             debug_params,
-            model_params,
             optim_params,
-            train_params
+            data_params,
         ]
     )
 
@@ -86,22 +94,19 @@ def sample_config_params(rng, params):
 
 def run(
     ex,
-    np_th_seed,
     n_epochs,
-    lr,
-    weight_decay,
+    bpd_weight,
+    np_th_seed,
     debug,
-    hidden_channels,
-    L,
-    flow_coupling,
+    first_n,
+    clip_grad_percentile,
 ):
     if debug:
         n_epochs = 3
-        first_n = 512
-    else:
-        first_n = None
+        first_n = 1024
     kwargs = locals()
     kwargs.pop("ex")
+    kwargs.pop("debug")
     if not debug:
         log.setLevel("INFO")
     file_obs = ex.observers[0]
@@ -119,13 +124,19 @@ def run(
     ex.info["finished"] = False
 
     import os
-    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
-    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
-    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
-    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
-    from lossy.experiments.large_res_glow.run import run_exp
+    os.environ["pytorch_data"] = "/home/schirrmr/data/pytorch-datasets/"
+    os.environ[
+        "mimic_cxr"
+    ] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ[
+        "small_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ[
+        "normal_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
+    from lossy.experiments.mask_latent import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()

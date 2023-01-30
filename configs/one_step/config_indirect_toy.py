@@ -59,6 +59,7 @@ def get_grid_param_list():
         "dataset": ["stripes"],
         "saved_model_folder": [None],
         "stripes_factor": [0.15],
+        "preproc_glow_path": [None],
     })
 
     grid_params = product_of_list_of_lists_of_dicts(

@@ -188,7 +188,6 @@ def get_grid_param_list():
             ],  # /home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th
             "soft_clamp_0_1": [True],
             "unet_use_bias": [True],
-            "encoder_clip_eps": [0.1],
             #"preproc_glow_path": [None, "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/22/10_model.th"],
         }
     )

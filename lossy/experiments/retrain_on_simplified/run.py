@@ -95,6 +95,8 @@ def run_exp(
     # Ignore for now assert config["noise_after_simplifier"]
     batch_size = config["batch_size"]
     split_test_off_train = False
+    mimic_cxr_target = config.get('mimic_cxr_target', None)
+    stripes_factor = config.get('stripes_factor', None)
 
     log.info("Load data...")
     data_path = data_locations.pytorch_data
@@ -113,6 +115,8 @@ def run_exp(
         standardize=False,
         split_test_off_train=split_test_off_train,
         first_n=first_n,
+        mimic_cxr_target=mimic_cxr_target,
+        stripes_factor=stripes_factor,
     )
 
     depth = config.get("depth", 16)
@@ -192,8 +196,6 @@ def run_exp(
         )
         clf.load_state_dict(saved_clf_state_dict)
 
-
-
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []
@@ -236,7 +238,7 @@ def run_exp(
                 FixedAugment(kornia.augmentation.RandomHorizontalFlip(), X_shape),
             )
         else:
-            assert dataset in ["mnist", "fashionmnist", "svhn"]
+            assert dataset in ["mnist", "fashionmnist", "svhn", "mimic-cxr"]
         aug_m.add_module("noise", Expression(lambda x: x + noise))
 
         return aug_m

@@ -92,6 +92,7 @@ def load_dataset(
     split_test_off_train,
     batch_size,
     stripes_factor,
+    eval_batch_size=256,
 ):
     assert dataset_name in [
         "mnist_fashion",
@@ -202,7 +203,6 @@ def load_dataset(
         )
         dst_train = torch.utils.data.Subset(deepcopy(dst_train), np.arange(0, n_split))
 
-    eval_batch_size = 256
     trainloader = torch.utils.data.DataLoader(
         dst_train, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True
     )
