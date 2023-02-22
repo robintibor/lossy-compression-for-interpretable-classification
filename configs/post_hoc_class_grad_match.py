@@ -13,6 +13,8 @@ from hyperoptim.parse import (
 from hyperoptim.results import load_data_frame
 import torch as th
 import torch.backends.cudnn as cudnn
+import numpy as np
+from torchvision import transforms
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s : %(message)s")
 
@@ -30,8 +32,8 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-class-grad-match-row-images/",
-                           #"/home/schirrmr/data/exps/lossy/cifar10-one-step/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-dist-threshold/",
+            # "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
 
@@ -41,23 +43,75 @@ def get_grid_param_list():
         }
     ]
 
-    data_params = dictlistprod({
-        'image_inds':  [[i] for i in [10,289,293,343,367,1075,1307,1346,1356,2383, 2589,2968]],
-    })
-    #273,1057
+    root = "/data/datasets/ImageNet/imagenet-pytorch"
 
-    model_params = dictlistprod({
-        "model_name": ['resnet50', 'wide_resnet50_2'],
-        "softplus_beta": [4],
-            #["/work/dlclarge2/schirrmr-lossy-compression/exps/rebuttal/one-step/22/"],
-    })
+    valid_transform = transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ]
+    )
 
-    train_params = dictlistprod({
-        'n_epochs': [750],
-        "bpd_weight": [10,20,40,80],
-        "val_fn_name": ["relued", "relu_match"],
-        "ref_from_orig": [True, False],
-    })
+
+    os.environ["pytorch_data"] = "/home/schirrmr/data/pytorch-datasets/"
+    os.environ[
+        "mimic_cxr"
+    ] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ[
+        "small_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ[
+        "normal_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
+    from lossy.datasets import ImageNet
+    split = "train"
+    dataset = ImageNet(
+        root=root,
+        split=split,
+        transform=valid_transform,
+        ignore_archive=True,
+    )
+
+    class_a = 46
+    class_b = 40
+    ys_from_imgs = np.array([img[1] for img in dataset.imgs])
+    inds = np.flatnonzero((ys_from_imgs == class_a) | (ys_from_imgs == class_b))
+
+    data_params = dictlistprod(
+        {
+            "image_ind": inds,
+            # "image_ind": np.concatenate(
+            #     [
+            #         np.arange(100 + i_start, 1281167, 1281167 // 100)
+            #         for i_start in range(11, 12)
+            #     ]
+            # ),
+            # np.arange(100,1281167, 1281167 // 100),#range(100),
+
+            "split": [split],
+        }
+    )
+    # 273,1057
+
+    model_params = dictlistprod(
+        {
+            "model_name": [
+                "resnet50",
+            ],
+            "softplus_beta": [4],
+        }
+    )
+
+    train_params = dictlistprod(
+        {
+            "n_epochs": [700],
+            "dist_threshold": [0.4],
+            "wanted_y": [[class_a, class_b]],
+            "n_top_classes": [None],
+        }
+    )
 
     random_params = dictlistprod(
         {
@@ -82,8 +136,19 @@ def sample_config_params(rng, params):
     return params
 
 
-def run(ex, model_name, n_epochs, image_inds, bpd_weight, np_th_seed, val_fn_name, ref_from_orig, debug,
-        softplus_beta):
+def run(
+    ex,
+    model_name,
+    n_epochs,
+    image_ind,
+    dist_threshold,
+    np_th_seed,
+    debug,
+    softplus_beta,
+    n_top_classes,
+    split,
+    wanted_y,
+):
     if debug:
         n_epochs = 3
     kwargs = locals()
@@ -104,16 +169,21 @@ def run(ex, model_name, n_epochs, image_inds, bpd_weight, np_th_seed, val_fn_nam
     start_time = time.time()
     ex.info["finished"] = False
 
-
     import os
-    os.environ['pytorch_data'] = '/home/schirrmr/data/pytorch-datasets/'
-    os.environ['mimic_cxr'] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
-    os.environ['small_glow_path'] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
-    os.environ['normal_glow_path'] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
-    os.environ['imagenet'] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
+    os.environ["pytorch_data"] = "/home/schirrmr/data/pytorch-datasets/"
+    os.environ[
+        "mimic_cxr"
+    ] = "/work/dlclarge2/schirrmr-mimic-cxr-jpg/physionet.org/files/mimic-cxr-jpg/2.0.0/"
+    os.environ[
+        "small_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible-neurips/smaller-glow/21/10_model.th"
+    os.environ[
+        "normal_glow_path"
+    ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
+    os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
-    from lossy.experiments.post_hoc_class_grad_match import  run_exp
+    from lossy.experiments.post_hoc_class_grad_match import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()
