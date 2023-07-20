@@ -16,27 +16,37 @@ from lossy.util import np_to_th
 
 def get_classifier_from_folder(exp_folder, load_weights=True):
     saved_model_folder = exp_folder
+
     config = json.load(open(
         os.path.join(exp_folder, 'config.json'),
         'r'))
     model_name = config.get("model_name", "wide_nf_net")
-    depth = config["depth"]
+
+    depth = config.get("depth", 16)
     if "widen_factor" in config:
         widen_factor = config["widen_factor"]
     else:
-        widen_factor = config["width"]
+        widen_factor = config.get("width", 2)
     dropout = config.get("dropout", 0.3)
     optim_type = config.get('optim_type', 'adamw')
     mimic_cxr_target = config.get('mimic_cxr_target', 'pleural_effusion')
-    activation = config.get(
-        "activation", "relu"
-    )  # default was relu
+    if 'saved_exp_folder' in config:
+        activation = "elu"
+    else:
+        activation = config.get(
+            "activation", "relu"
+        )  # default was relu
     norm_simple_convnet = config.get(
         "norm_simple_convnet", None
     )
     pooling = config.get("pooling", None)
     external_pretrained_clf = config.get("external_pretrained_clf", False)
-    dataset = config['dataset']
+    if 'saved_exp_folder' in config:
+        dataset = json.load(open(
+            os.path.join(config['saved_exp_folder'], 'config.json'),
+            'r'))['dataset']
+    else:
+        dataset = config['dataset']
     stripes_factor = 0.3
 
     data_path = data_locations.pytorch_data
@@ -122,21 +132,31 @@ def get_clf_and_optim(
             assert (
                 saved_model_config.get("model_name", "wide_nf_net") == model_name
             ), f"{model_name} given but trying to load {saved_model_config['model_name']}"
-            depth = saved_model_config["depth"]
+            depth = saved_model_config.get("depth", 16)
             if "widen_factor" in saved_model_config:
                 widen_factor = saved_model_config["widen_factor"]
             else:
-                widen_factor = saved_model_config["width"]
+                widen_factor = saved_model_config.get("width", 2)
 
             dropout = saved_model_config.get("dropout", 0.3)
-            activation = saved_model_config.get(
-                "activation", "relu"
-            )  # default was relu
+            if 'saved_exp_folder' in saved_model_config:
+                activation = "elu"
+            else:
+                activation = saved_model_config.get(
+                    "activation", "relu"
+                )  # default was relu
             norm_simple_convnet = saved_model_config.get(
                 "norm_simple_convnet", norm_simple_convnet
             )
             pooling = saved_model_config.get("pooling", pooling)
-            assert saved_model_config.get("dataset", "cifar10") == dataset
+            if 'saved_exp_folder' in saved_model_config:
+                dataset_in_config = json.load(open(
+                    os.path.join(saved_model_config['saved_exp_folder'], 'config.json'),
+                    'r'))['dataset']
+            else:
+                dataset_in_config = saved_model_config.get("dataset", "cifar10")
+            assert dataset_in_config == dataset
+
         if model_name == "wide_nf_net":
             from lossy.wide_nf_net import conv_init, Wide_NFResNet
 

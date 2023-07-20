@@ -52,6 +52,7 @@ def get_all_activations(
     net,
     X,
     wanted_modules=None,
+    also_return_out=False,
 ):
     if wanted_modules is None:
         wanted_modules = net.modules()
@@ -65,17 +66,21 @@ def get_all_activations(
         handle = module.register_forward_hook(append_activations)
         handles.append(handle)
     try:
-        _ = net(X)
+        out = net(X)
     finally:
         for h in handles:
             h.remove()
-    return activations
+    if also_return_out:
+        return activations, out
+    else:
+        return activations
 
 
 def get_in_out_activations_per_module(
     net,
     X,
     wanted_modules=None,
+    return_final_out=False,
 ):
     if wanted_modules is None:
         wanted_modules = list(net.modules())
@@ -119,7 +124,7 @@ def get_in_out_activations_per_module(
         )
         handles.append(handle)
     try:
-        _ = net(X)
+        final_out = net(X)
     finally:
         for h in handles:
             h.remove()
@@ -127,7 +132,10 @@ def get_in_out_activations_per_module(
         # flatten nested list again
         for key in ["in_act", "out_act"]:
             module_to_vals[m][key] = [t for l in module_to_vals[m][key] for t in l]
-    return module_to_vals
+    if return_final_out:
+        return module_to_vals, final_out
+    else:
+        return module_to_vals
 
 
 def get_in_out_acts_and_in_out_grads_per_module(
@@ -172,6 +180,7 @@ def get_in_out_acts_and_in_out_grads_per_module(
         if "in_act" not in module_to_vals[orig_module]:
             module_to_vals[orig_module]["in_act"] = [None] * len(device_ids)
             module_to_vals[orig_module]["out_act"] = [None] * len(device_ids)
+
         module_to_vals[orig_module]["in_act"][
             device_id_to_i_list[input[0].device.index]
         ] = input
@@ -406,7 +415,6 @@ def conv_batch_grad(module, in_act, out_grad, conv_grad_fn="loop"):
         weight_batch_grad = conv_weight_grad_backpack(module, in_act, out_grad)
 
     bias_batch_grad = out_grad.sum(dim=(-2, -1))
-    # print("hi")
     # weight_batch_grad, bias_batch_grad = conv_grad_groups(module, in_act, out_grad)
     return weight_batch_grad, bias_batch_grad
 
@@ -646,6 +654,28 @@ def grad_in_act_act_same_sign_masked(m, x_m_vals, ref_m_vals):
 
         x_val = r_g * x_a * mask  # clip_min_max(xg, rg) *
         ref_val = mask * r_g * r_a
+        vals.append((x_val, ref_val))
+    return vals
+
+
+def grad_in_act_act_relued_one_sided_match(m, x_m_vals, ref_m_vals):
+    vals = []
+    for x_a, x_g, r_a, r_g in zip(
+        x_m_vals["in_act"],
+        x_m_vals["in_grad"],
+        ref_m_vals["in_act"],
+        ref_m_vals["in_grad"],
+    ):
+        mask_pos_info_orig = (r_a * r_g) > 0
+        mask_neg_info_simple = (x_a * r_g) < 0
+        # retain those dims that either contain
+        # class-positive info in orig
+        # or contain class-negative info and
+        # still contain some class-negative info in simple
+        mask_simple = (mask_pos_info_orig + (mask_neg_info_simple * ~mask_pos_info_orig))
+
+        x_val = mask_simple * r_g * x_a
+        ref_val = mask_pos_info_orig * r_g * r_a
         vals.append((x_val, ref_val))
     return vals
 
