@@ -76,6 +76,34 @@ def get_all_activations(
         return activations
 
 
+def get_all_in_activations(
+            net,
+            X,
+            wanted_modules=None,
+            also_return_out=False,
+    ):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+    activations = []
+
+    def append_activations(module, input, output):
+        activations.append(input)
+
+    handles = []
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        handles.append(handle)
+    try:
+        out = net(X)
+    finally:
+        for h in handles:
+            h.remove()
+    if also_return_out:
+        return activations, out
+    else:
+        return activations
+
+
 def get_in_out_activations_per_module(
     net,
     X,
@@ -256,6 +284,68 @@ def conv_grad_groups(module, in_act, out_grad):
         nd=2,
     )
     return weight_bgrad, bias_bgrad
+
+
+def compute_deeplift(net, X, ref_acts, wanted_modules, batch_size, wanted_y):
+    if wanted_modules is None:
+        wanted_modules = net.modules()
+
+    used_i_acts = []
+    i_act = 0
+    handles_backward = []
+    grad_inputs = []
+
+    def append_grads(grad_input, ):
+        assert grad_input is not None
+        grad_inputs.insert(0, grad_input)
+
+    def append_activations(module, input, output):
+        ref_act = ref_acts.pop(0)
+        assert len(ref_act) == 1
+        orig_acts = ref_act[0]
+        assert len(input) == 1
+        baseline_acts = input[0].unsqueeze(1)
+        alpha = th.linspace(0, 1, batch_size, device="cuda")
+        expanded_alpha = alpha.view(1, -1, *((1,) * (baseline_acts.ndim - 2)))
+        baseline_acts_scaled = (1 - expanded_alpha) * baseline_acts
+        mixed_acts = (
+                expanded_alpha * orig_acts.unsqueeze(1)
+                + baseline_acts + (baseline_acts_scaled - baseline_acts).detach()
+        )
+        # mixed_acts = mixed_acts_for_grad + (mixed_acts - mixed_acts_for_grad).detach()
+        mixed_acts_flat = mixed_acts.reshape(
+            np.prod(mixed_acts.shape[:2]), *mixed_acts.shape[2:]
+        )
+
+        modules_to_handles[module].remove()
+        out_mixed_flat = module(mixed_acts_flat)
+        handle = module.register_forward_hook(append_activations)
+        modules_to_handles[module] = handle
+
+        out_reshaped = out_mixed_flat.reshape(len(output), batch_size, *output.shape[1:])
+        out_averaged = out_reshaped.mean(dim=1)
+        this_out = out_averaged + (output - out_averaged).detach()
+
+        #this_grads = th.autograd.grad(this_out.abs().sum(), [input[0]], retain_graph=True)[0]
+        # print("grad now!", this_grads.abs().sum())
+
+        handle = input[0].register_hook(append_grads)
+        handles_backward.append(handle)
+        return this_out
+
+    modules_to_handles = {}
+    for module in wanted_modules:
+        handle = module.register_forward_hook(append_activations)
+        modules_to_handles[module] = handle
+    try:
+        out = net(X)
+        simple_out_wanted = out.gather(dim=1, index=wanted_y.unsqueeze(1))
+        th.sum(simple_out_wanted).backward()
+    finally:
+        for m in modules_to_handles:
+            modules_to_handles[m].remove()
+        for h in handles_backward:
+            h.remove()
 
 
 def scaled_conv_grad(module, in_act, out_grad, conv_grad_fn):
