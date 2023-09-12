@@ -50,7 +50,7 @@ def get_grid_param_list():
             "simple_clf_loss_weight": [0,],
             "lr_clf": [3e-4],
             "n_epochs": [100],
-            "dist_threshold": [0.6, 0.7],#[0.05,0.1,0.2,0.3,0.4,0.5],
+            "dist_threshold": [0.05,0.1,0.2,0.3,0.4,0.5],#,[0.6, 0.7],#[0.05,0.1,0.2,0.3,0.4,0.5],
             #"bpd_weight": [-0.5],
             #"loss_name": ["act_match"],
     })

@@ -217,6 +217,8 @@ def run_exp(
         "ConvNet",
         "linear",
         "torchvision_resnet18",
+        "vit",
+        "timm_vit"
     ]
     assert skip_unneeded_bpd_computations
     if saved_model_folder is not None:
@@ -1034,12 +1036,13 @@ def run_exp(
                         results[key + "_bpd"] = mean_bpd
                     writer.flush()
                     sys.stdout.flush()
-            nb_res_last_dict = dict(nb_res.metrics_df.iloc[-1])
+
+            nb_res_last_dict = nb_res.metrics_list[-1]
             for key in nb_res_last_dict:
                 print(f"{key:20s} {nb_res_last_dict[key]:.1E}")
                 writer.add_scalar("nb_res_" + key, nb_res_last_dict[key], i_epoch)
                 results["nb_res_" + key] = nb_res_last_dict[key]
-            nb_res.metrics_df.to_pickle(os.path.join(output_dir, "metrics_df.pkl.zip"))
+            nb_res.get_metrics_df().to_pickle(os.path.join(output_dir, "metrics_df.pkl.zip"))
 
             X, y = next(testloader.__iter__())
             X = X.cuda()

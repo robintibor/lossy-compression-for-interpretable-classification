@@ -104,6 +104,34 @@ def get_all_in_activations(
         return activations
 
 
+def get_all_in_out_activations(
+            net,
+            X,
+            wanted_modules=None,
+            also_return_out=False,
+    ):
+        if wanted_modules is None:
+            wanted_modules = net.modules()
+        activations = []
+
+        def append_activations(module, input, output):
+            activations.append((input, output))
+
+        handles = []
+        for module in wanted_modules:
+            handle = module.register_forward_hook(append_activations)
+            handles.append(handle)
+        try:
+            out = net(X)
+        finally:
+            for h in handles:
+                h.remove()
+        if also_return_out:
+            return activations, out
+        else:
+            return activations
+
+
 def get_in_out_activations_per_module(
     net,
     X,

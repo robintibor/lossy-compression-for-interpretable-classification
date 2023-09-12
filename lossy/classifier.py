@@ -12,6 +12,8 @@ from lossy import wide_nf_net
 from lossy.condensation.networks import ConvNet
 from lossy.datasets import get_dataset
 from lossy.util import np_to_th
+from lossy.vit import ViT
+
 
 
 def get_classifier_from_folder(exp_folder, load_weights=True):
@@ -185,6 +187,18 @@ def get_clf_and_optim(
                 pooling,
                 im_size,
             ).cuda()
+        elif model_name == "vit":
+            model = ViT(
+                in_c=3,
+                num_classes=num_classes,
+                img_size=32,
+                patch=8,
+                dropout=0.,
+                num_layers=7,
+                hidden=384,
+                mlp_hidden=384*4,
+                head=8,
+                is_cls_token=True).cuda()
         else:
             assert False
     elif model_name == "resnet18":
@@ -212,6 +226,24 @@ def get_clf_and_optim(
             nn.Flatten(),
             nn.Linear(3072, num_classes),
         )
+    elif model_name == "vit":
+        model = ViT(
+            in_c=3,
+            num_classes=num_classes,
+            img_size=32,
+            patch=8,
+            dropout=0.,
+            num_layers=7,
+            hidden=384,
+            mlp_hidden=384*4,
+            head=8,
+            is_cls_token=True)
+    elif model_name == "timm_vit":
+        import timm
+        from torchvision import transforms
+        net = timm.create_model("vit_base_patch16_384", pretrained=True)
+        net.head = nn.Linear(net.head.in_features, 10).cuda()
+        model = nn.Sequential(transforms.Resize(384), net)
     else:
         assert False
 
@@ -223,7 +255,11 @@ def get_clf_and_optim(
             "wide_nf_net",
             "wide_bnorm_net",
             "ConvNet",
+            "vit"
         ]
+        saved_model_config = json.load(
+            open(os.path.join(saved_model_folder, "config.json"), "r")
+        )
         if "lr_preproc" in saved_model_config:
             try:
                 # used to have nf_net in name later removed that
@@ -252,10 +288,10 @@ def get_clf_and_optim(
     params_with_weight_decay = []
     params_without_weight_decay = []
     for name, param in clf.named_parameters():
-        if "weight" in name or "gain" in name:
+        if "weight" in name or "gain" in name or "cls_token" in name or "pos_emb" in name:
             params_with_weight_decay.append(param)
         else:
-            assert "bias" in name
+            assert "bias" in name, f"Unknown parameter name {name}"
             params_without_weight_decay.append(param)
 
     beta_clf = (0.9, 0.995)

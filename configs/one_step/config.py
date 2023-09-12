@@ -176,7 +176,7 @@ def get_grid_param_list():
             "depth": [16],
             "widen_factor": [2],
             "n_start_filters": [64],
-            "model_name": ["wide_nf_net"],
+            "model_name": ["vit"],#["wide_nf_net"],
             "adjust_betas": [False],
             "save_models": [True],
             "activation": ["shifted_softplus_1"],
