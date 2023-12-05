@@ -16,7 +16,7 @@ from lossy.vit import ViT
 
 
 
-def get_classifier_from_folder(exp_folder, load_weights=True):
+def get_classifier_from_folder(exp_folder, load_weights=True, return_optim=False):
     saved_model_folder = exp_folder
 
     config = json.load(open(
@@ -84,7 +84,7 @@ def get_classifier_from_folder(exp_folder, load_weights=True):
 
     lr_clf = 1e-3
 
-    clf, _ = get_clf_and_optim(
+    clf, optim = get_clf_and_optim(
             model_name=model_name,
             num_classes=num_classes,
             normalize=normalize,
@@ -101,7 +101,10 @@ def get_classifier_from_folder(exp_folder, load_weights=True):
             im_size=im_size,
             external_pretrained_clf=external_pretrained_clf,
     )
-    return clf
+    if return_optim:
+        return clf, optim
+    else:
+        return clf
 
 
 def get_clf_and_optim(

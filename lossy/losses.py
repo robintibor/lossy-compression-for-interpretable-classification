@@ -4,7 +4,7 @@ import torch as th
 def expected_grad_loss(out,y, dim=1):
     # same as cross ent on probabilties moved to half point between uniform
     # and predicted
-    assert len(out) == len(y)
+    assert len(out) == len(y), f"out len {len(out)} should be same as y len {len(y)}"
     with th.no_grad():
         softmaxed = th.softmax(out, dim=dim)
         smoothed = (softmaxed + 1/out.shape[dim]) / 2

@@ -79,12 +79,23 @@ def get_grid_param_list():
         ]
 
     exp_ids = df.index
-    saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
-                         for exp_id in exp_ids]
+    #saved_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
+    #                     for exp_id in exp_ids]
+
+    parent_exp_folder = '/work/dlclarge2/schirrmr-lossy-compression/exps/tmlr/gradactmatch/'
+    nfnet_exp_ids = [1523, 1533, 1535, 1540, 1541, 1543]
+    vit_exp_ids = [1637,1638,1639,1640,1641,1642]
+    saved_clf_exp_folders = [
+        os.path.join(parent_exp_folder, str(nfnet_exp_ids[0])),
+        os.path.join(parent_exp_folder, str(vit_exp_ids[0])),
+        ]
+    saved_preproc_exp_folders = [os.path.join(parent_exp_folder, str(exp_id))
+                             for exp_id in nfnet_exp_ids + vit_exp_ids]
 
 
     exp_params = dictlistprod({
-        'saved_exp_folder': saved_exp_folders,
+        'saved_clf_exp_folder': saved_clf_exp_folders,
+        'saved_preproc_exp_folder' : saved_preproc_exp_folders,
     })
 
     train_params = dictlistprod(
@@ -147,7 +158,7 @@ def sample_config_params(rng, params):
 
 def run(
     ex,
-    saved_exp_folder,
+    saved_preproc_exp_folder,
     n_epochs,
     init_pretrained_clf,
     lr_clf,
@@ -165,6 +176,7 @@ def run(
     jpg_quality,
     simclr_loss_factor,
     use_saved_clf_model_folder,
+    saved_clf_exp_folder,
 ):
     if debug:
         n_epochs = 3

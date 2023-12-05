@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-dist-threshold/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-reproduce-old/",
             # "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -79,11 +79,11 @@ def get_grid_param_list():
     # ys_from_imgs = np.array([img[1] for img in dataset.imgs])
     # inds = np.flatnonzero((ys_from_imgs == class_a) | (ys_from_imgs == class_b))
     split = "val"
-    inds = [2383, 2968, 1356, 1075, 10, 293, 355, 367, 506]
+    inds = [2383, 2968, 1356, 1075, 10, 293, 355, 367]
 
     data_params = dictlistprod(
         {
-            "image_ind": inds,
+            "image_inds": [[i] for i in inds],
             # "image_ind": np.concatenate(
             #     [
             #         np.arange(100 + i_start, 1281167, 1281167 // 100)
@@ -91,8 +91,6 @@ def get_grid_param_list():
             #     ]
             # ),
             # np.arange(100,1281167, 1281167 // 100),#range(100),
-
-            "split": [split],
         }
     )
     # 273,1057
@@ -105,14 +103,13 @@ def get_grid_param_list():
             "softplus_beta": [4],
         }
     )
-
+            
     train_params = dictlistprod(
         {
-            "n_epochs": [700],
-            "dist_threshold": [0.4],
-            "wanted_y": [None],#[None, None]],
-            "n_top_classes": [4],
-            "add_true_class": [True],
+            "n_epochs": [500],
+            "bpd_weight": [10],
+            "ref_from_orig": [True],
+            "val_fn_name": ["relu_match"],
         }
     )
 
@@ -140,18 +137,8 @@ def sample_config_params(rng, params):
 
 
 def run(
-    ex,
-    model_name,
-    n_epochs,
-    image_ind,
-    dist_threshold,
-    np_th_seed,
-    debug,
-    softplus_beta,
-    n_top_classes,
-    split,
-    wanted_y,
-    add_true_class,
+    ex,model_name, n_epochs, image_inds, bpd_weight, np_th_seed, debug,  val_fn_name, ref_from_orig,
+            softplus_beta, 
 ):
     if debug:
         n_epochs = 3
@@ -187,7 +174,7 @@ def run(
     ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
     os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
-    from lossy.experiments.post_hoc_class_grad_match import run_exp
+    from lossy.experiments.post_hoc_class_grad_match_old import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()

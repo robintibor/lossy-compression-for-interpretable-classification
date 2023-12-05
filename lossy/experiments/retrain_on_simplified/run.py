@@ -28,7 +28,7 @@ from lossy.image2image import WrapResidualIdentityUnet, UnetGenerator
 from lossy.image_convert import add_glow_noise_to_0_1, quantize_data, ContrastNormalize, img_0_1_to_glow_img
 from lossy.image_convert import to_plus_minus_one
 from lossy.util import np_to_th, th_to_np
-
+from lossy.classifier import get_classifier_from_folder
 
 
 from kornia.filters import GaussianBlur2d
@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 def run_exp(
     output_dir,
     first_n,
-    saved_exp_folder,
+    saved_preproc_exp_folder,
     n_epochs,
     init_pretrained_clf,
     lr_clf,
@@ -60,8 +60,8 @@ def run_exp(
     jpg_quality,
     simclr_loss_factor,
     use_saved_clf_model_folder,
+    saved_clf_exp_folder,
 ):
-
     writer = SummaryWriter(output_dir)
     hparams = {k: v for k, v in locals().items() if v is not None}
     writer = SummaryWriter(output_dir)
@@ -71,6 +71,10 @@ def run_exp(
     trange = range
 
     set_random_seeds(np_th_seed, True)
+
+    assert not contrast_normalize
+    assert not restandardize_inputs
+    assert not with_batchnorm
 
     if (blur_simplifier) or (jpg_quality is not None):
         assert dataset is not None
@@ -83,14 +87,9 @@ def run_exp(
             'widen_factor': 2,
         }
     else:
-        config = json.load(open(os.path.join(saved_exp_folder, "config.json"), "r"))
+        config = json.load(open(os.path.join(saved_preproc_exp_folder, "config.json"), "r"))
     noise_augment_level = config.get("noise_augment_level", 0)
-    if use_saved_clf_model_folder:
-        saved_model_folder = config.get("saved_model_folder", None)
-    else:
-        saved_model_folder = None
     dataset = config["dataset"]
-
 
     # Ignore for now assert config["noise_after_simplifier"]
     batch_size = config["batch_size"]
@@ -119,91 +118,26 @@ def run_exp(
         stripes_factor=stripes_factor,
     )
 
-    depth = config.get("depth", 16)
-    widen_factor = config.get("widen_factor", 2)
-    dropout = 0.3
-    activation = "elu"  # was relu in past
-    if saved_model_folder is not None:
-        saved_model_config = json.load(
-            open(os.path.join(saved_model_folder, "config.json"), "r")
-        )
-        depth = saved_model_config["depth"]
-        widen_factor = saved_model_config["widen_factor"]
-        dropout = saved_model_config["dropout"]
-        activation = saved_model_config.get("activation", "relu")  # default was relu
-        assert saved_model_config.get("dataset", "cifar10") == dataset
-    if init_pretrained_clf:
-        assert config["save_models"]
-
-    log.info("Create classifier...")
-    # Create model
-
-    from lossy import wide_nf_net
-
-    if not with_batchnorm:
-        from lossy.wide_nf_net import conv_init, Wide_NFResNet
-
-        model = Wide_NFResNet(
-            depth, widen_factor, dropout, num_classes, activation=activation
-        ).cuda()
-        model.apply(conv_init)
-    else:
-        activation = "relu"  # overwrite for wide resnet for now
-        from lossy.wide_resnet import Wide_ResNet, conv_init
-
-        model = Wide_ResNet(
-            depth, widen_factor, dropout, num_classes, activation=activation
-        ).cuda()
-        model.apply(conv_init)
-
     log.info("Create preprocessor...")
     if blur_simplifier:
         preproc = GaussianBlur2d((15, 15), (blur_sigma, blur_sigma))
     elif jpg_quality is not None:
         preproc = JPGCompress(int(jpg_quality))
     else:
-        preproc = get_preprocessor_from_folder(saved_exp_folder)
+        preproc = get_preprocessor_from_folder(saved_preproc_exp_folder)
 
-    log.info("Add normalizer to classifier...")
-    if contrast_normalize:
-        normalize = ContrastNormalize()
-    else:
-        if restandardize_inputs:
-            all_simple_X = []
-            for X, y in train_det_loader:
-                X = X.cuda()
-                with th.no_grad():
-                    simple_X = preproc(X)
-                    all_simple_X.append(simple_X)
-
-            mean = th.cat(all_simple_X).mean(dim=(0, 2, 3)).detach()
-
-            std = th.cat(all_simple_X).std(dim=(0, 2, 3)).detach()
-        else:
-            mean = np_to_th(wide_nf_net.mean[dataset], device="cpu", dtype=np.float32)
-            std = np_to_th(wide_nf_net.std[dataset], device="cpu", dtype=np.float32)
-
-        normalize = kornia.augmentation.Normalize(
-            mean=mean,
-            std=std,
-        )
-
-    clf = nn.Sequential(normalize, model)
-    clf = clf.cuda()
-    if init_pretrained_clf:
-        saved_clf_state_dict = th.load(
-            os.path.join(saved_exp_folder, "clf_state_dict.th")
-        )
-        clf.load_state_dict(saved_clf_state_dict)
+    log.info("Create classifier...")
+    clf = get_classifier_from_folder(saved_clf_exp_folder,
+                                     load_weights=init_pretrained_clf)
 
     log.info("Create optimizers...")
     params_with_weight_decay = []
     params_without_weight_decay = []
     for name, param in clf.named_parameters():
-        if "weight" in name or "gain" in name:
+        if "weight" in name or "gain" in name or "cls_token" in name or "pos_emb" in name:
             params_with_weight_decay.append(param)
         else:
-            assert "bias" in name
+            assert "bias" in name, f"Unknown parameter name {name}"
             params_without_weight_decay.append(param)
 
     beta_clf = (0.9, 0.995)
@@ -282,7 +216,8 @@ def run_exp(
         add_original_data=(add_original_data or (simclr_loss_factor is not None)),
     )
     _, testloader_tensors = get_tensor_loaders(testloader, preproc, batch_size,
-        add_original_data=(add_original_data or (simclr_loss_factor is not None)))
+                                               add_original_data=(
+                                                           add_original_data or (simclr_loss_factor is not None)))
     for i_epoch in trange(n_epochs):
         for batch in tqdm(trainloader_tensors):
             if add_original_data or (simclr_loss_factor is not None):
@@ -308,8 +243,8 @@ def run_exp(
             if simclr_loss_factor is not None:
                 simclr_aug = modified_simclr_pipeline_transform(True)
                 X1_X2 = [simclr_aug(x) for x in orig_X]
-                X1 = th.stack([x1 for x1,x2 in X1_X2]).cuda()
-                X2 = th.stack([x2 for x1,x2 in X1_X2]).cuda()
+                X1 = th.stack([x1 for x1, x2 in X1_X2]).cuda()
+                X2 = th.stack([x2 for x1, x2 in X1_X2]).cuda()
                 z1 = clf[1].compute_features(clf[0](X1))
                 z2 = clf[1].compute_features(clf[0](X2))
                 simclr_loss = compute_nt_xent_loss(z1, z2)
@@ -324,17 +259,17 @@ def run_exp(
         results = {}
         print(f"Epoch {i_epoch:d}")
         for loader_name, loader in (
-            ("train_preproc", train_det_loader_tensors),
-            ("train", train_det_loader),
-            ("test_preproc", testloader_tensors),
-            ("test", testloader),
+                ("train_preproc", train_det_loader_tensors),
+                ("train", train_det_loader),
+                ("test_preproc", testloader_tensors),
+                ("test", testloader),
         ):
             eval_df = pd.DataFrame()
             for batch in tqdm(loader):
                 if (add_original_data or (simclr_loss_factor is not None)) and ("preproc" in loader_name):
                     X, _, y = batch
                 else:
-                    X,y = batch
+                    X, y = batch
                 X = X.cuda()
                 y = y.cuda()
                 if "preproc" in loader_name:
@@ -394,7 +329,7 @@ def run_exp(
                 X = X.cuda()
                 y = y.cuda()
                 with th.no_grad():
-                    simple_X =  add_glow_noise_to_0_1(preproc(X))
+                    simple_X = add_glow_noise_to_0_1(preproc(X))
                     this_bpds = get_bpd(gen, simple_X)
                     bpds.append(th_to_np(this_bpds))
             results[loader_name + '_bpd'] = np.mean(np.concatenate(bpds))

@@ -32,7 +32,7 @@ def get_grid_param_list():
 
     save_params = [
         {
-            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-dist-threshold/",
+            "save_folder": "/work/dlclarge2/schirrmr-lossy-compression/exps/post-hoc-draft-diff-models/",
             # "/home/schirrmr/data/exps/lossy/cifar10-one-step/",
         }
     ]
@@ -79,6 +79,8 @@ def get_grid_param_list():
     # ys_from_imgs = np.array([img[1] for img in dataset.imgs])
     # inds = np.flatnonzero((ys_from_imgs == class_a) | (ys_from_imgs == class_b))
     split = "val"
+   
+    # inds = np.arange(0,50000,500)
     inds = [2383, 2968, 1356, 1075, 10, 293, 355, 367, 506]
 
     data_params = dictlistprod(
@@ -100,19 +102,22 @@ def get_grid_param_list():
     model_params = dictlistprod(
         {
             "model_name": [
-                "resnet50",
+                "resnet18",  "resnet50", "resnet101",  "wide_resnet50_2",
             ],
-            "softplus_beta": [4],
+            "softplus_beta": [4],#[4],
         }
     )
 
     train_params = dictlistprod(
         {
             "n_epochs": [700],
-            "dist_threshold": [0.4],
+            "dist_threshold": [1],#0.4],
             "wanted_y": [None],#[None, None]],
-            "n_top_classes": [4],
+            "n_top_classes": [2],
             "add_true_class": [True],
+            "bpd_weight": [3e-2],
+            "orig_factor": [1],
+            "start_pixel_val": [0.9],
         }
     )
 
@@ -152,6 +157,9 @@ def run(
     split,
     wanted_y,
     add_true_class,
+    start_pixel_val,
+    orig_factor,
+    bpd_weight,
 ):
     if debug:
         n_epochs = 3
@@ -187,7 +195,7 @@ def run(
     ] = "/home/schirrmr/data/exps/invertible/pretrain/57/10_model.neurips.th"
     os.environ["imagenet"] = "/data/datasets/ImageNet/imagenet-pytorch/"
 
-    from lossy.experiments.post_hoc_class_grad_match import run_exp
+    from lossy.experiments.post_hoc_class_grad_match_draft import run_exp
 
     results = run_exp(**kwargs)
     end_time = time.time()
